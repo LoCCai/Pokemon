@@ -665,3 +665,11 @@ FodyWeavers.xsd
 result.txt
 upload_file.py
 custom_poke.py
+# Pokemon NoneBot2 runtime
+data/
+triggers.json
+handlers.txt
+
+
+.venv-wheel/
+
