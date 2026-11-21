@@ -413,6 +413,8 @@ async def map_ts_test_noauto_use(bot, ev: Event):
     now_time = math.ceil(now_time)
     send_flag = 0
     if now_time - last_send_time <= TS_CD:
+        if getattr(getattr(bot, "transport", None), "kind", "") == "web":
+            await bot.send(f"稍作休息，{TS_CD - (now_time - last_send_time) + 1} 秒后可以再次行动。")
         return
     else:
         time_send.record_user_time(uid,now_time)
@@ -966,6 +968,8 @@ async def map_ts_test_noauto_use_chuidiao(bot, ev: Event):
     now_time = math.ceil(now_time)
     send_flag = 0
     if now_time - last_send_time <= TS_CD:
+        if getattr(getattr(bot, "transport", None), "kind", "") == "web":
+            await bot.send(f"稍作休息，{TS_CD - (now_time - last_send_time) + 1} 秒后可以再次行动。")
         return
     time_send.record_user_time(uid,now_time)
     if TS_PIC == 1:
@@ -1290,6 +1294,8 @@ async def pokemon_pk_auto(bot, ev: Event):
     now_time = math.ceil(now_time)
     send_flag = 0
     if now_time - last_send_time <= TS_CD:
+        if getattr(getattr(bot, "transport", None), "kind", "") == "web":
+            await bot.send(f"稍作休息，{TS_CD - (now_time - last_send_time) + 1} 秒后可以再次行动。")
         return
     time_send.record_user_time(uid,now_time)
     mypokelist = await POKE._get_pokemon_list(uid)

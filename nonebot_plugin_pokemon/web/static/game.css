@@ -1,0 +1,57 @@
+*{box-sizing:border-box}
+body{margin:0;background:var(--app-bg);color:var(--ink);font:15px/1.5 var(--app-font,Inter,"Microsoft YaHei",system-ui,sans-serif)}
+button,input,select{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.56}
+button,input,select,summary{outline-offset:3px} :focus-visible{outline:2px solid var(--brand-strong)}
+button{border:1px solid var(--line-strong);background:var(--surface);border-radius:11px;padding:.58em .95em}
+button:hover:enabled{border-color:var(--brand-strong);background:var(--brand-soft)}
+input,select{min-width:0;border:1px solid var(--line-strong);border-radius:9px;background:var(--surface);padding:.62em .75em}
+select{max-width:100%}button.primary,button.primary:hover{background:var(--brand);color:var(--on-brand);border-color:transparent;font-weight:750}
+.game-shell{max-width:1280px;padding:clamp(12px,2vw,27px);margin:auto}.top,.section-heading,.row,dialog header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+h1,h2,h3,p{margin:0}h1{font-size:clamp(21px,2.4vw,30px);letter-spacing:-.05em;display:flex;align-items:center;gap:10px}h2{font-size:20px}h3{font-size:16px}
+.ball{display:inline-block;position:relative;width:29px;height:29px;border:3px solid var(--ink);border-radius:100%;background:linear-gradient(var(--brand) 43%,var(--ink) 43% 56%,var(--surface) 56%);transform:rotate(-20deg)}
+.ball:after{content:"";position:absolute;width:7px;height:7px;background:var(--surface);border:2px solid var(--ink);border-radius:50%;left:6px;top:6px}
+#trainer{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px}#trainer b{color:var(--ink)}
+nav{display:flex;gap:4px;overflow-x:auto;margin:14px 0;scrollbar-width:thin;border-bottom:1px solid var(--line)}
+nav button{border:0;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:none;white-space:nowrap;color:var(--muted);font-weight:650;padding:.58em 1em}
+nav button[aria-current=page]{color:var(--ink);border-color:var(--brand);background:var(--brand-soft)}
+#notice:not(:empty){margin:8px 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}
+.panel,.action-panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:clamp(12px,1.8vw,21px);min-width:0}
+.layout{display:grid;grid-template-columns:minmax(0,2.65fr) minmax(200px,1fr);gap:14px;align-items:start}
+.scene{position:relative;overflow:hidden;isolation:isolate;border:2px solid var(--line-strong);border-radius:18px;min-height:275px;height:clamp(285px,32vw,420px);background:#78b780}
+.scene canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated}
+.scene .plate{position:absolute;top:12px;left:12px;padding:7px 13px;background:#163d38ed;color:white;border:1px solid #cee6c78c;border-radius:9px;box-shadow:0 2px 0 #103e4450;pointer-events:none}
+.plate small{font-size:11px;color:#d5efdc}.plate h2{line-height:1.2;font-size:clamp(17px,2vw,25px)}
+.scene .map-pin{position:absolute;transform:translate(-50%,-15%);line-height:1.15;font-weight:700;font-size:12px;white-space:nowrap;padding:5px 7px;border:1px solid #33554a;background:#fff8d9;color:#274435;border-radius:7px;box-shadow:0 2px 0 #21453c8a}
+.scene .map-pin[aria-current=true]{background:#194c46;color:#fff8d9}.scene .map-pin:hover{background:#fff}
+.scene .party-sprite{position:absolute;bottom:20%;left:50%;width:clamp(88px,15vw,154px);height:45%;transform:translateX(-50%);object-fit:contain;filter:drop-shadow(2px 7px 1px #254b4059)}
+.scene .shadow-pad{position:absolute;bottom:18%;left:50%;transform:translateX(-50%);width:31%;height:12%;border-radius:50%;background:#4c865f93;border-bottom:4px solid #2f6e55}
+.scenebar{margin-top:10px;display:flex;flex-wrap:wrap;gap:7px}.rail,.stack{display:grid;gap:12px}
+.section-heading{margin:0 0 10px}.section-heading small,.muted,small{color:var(--muted)}.icon{padding:3px 9px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:9px}.starter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+.mon{display:flex;align-items:center;min-width:0;gap:8px;padding:7px 10px;text-align:left;width:100%;background:var(--surface-soft)}
+.mon.collection,.mon.starter{flex-direction:column;text-align:center;justify-content:center}.mon.starter[aria-pressed=true]{border:2px solid var(--brand-strong);background:var(--brand-soft)}
+.mon img,.sprite{width:55px;height:55px;object-fit:contain;flex:none}.mon.collection img,.mon.starter img{width:66px;height:66px}.mon span{min-width:0;overflow-wrap:anywhere}.mon small{display:block;font-size:11px}.mon b{font-size:14px}
+.rail .mon+.mon{margin-top:6px}.section-body{margin-top:12px}.chips,.actions,.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.toolbar{margin:0 0 12px}.toolbar label{display:flex;align-items:center;gap:7px}
+.chip{font-size:12px;background:var(--brand-soft);border:1px solid var(--line);border-radius:20px;padding:3px 9px}
+.action-panel{margin-top:12px}.tip{background:var(--surface-soft);border-radius:11px;padding:9px 12px;font-size:14px}.empty{color:var(--muted);padding:12px 0}
+.fighter{position:absolute;width:43%;height:80%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px}
+.fighter.player{left:4%;bottom:4%}.fighter.opponent{right:3%;top:2%;justify-content:flex-start;flex-direction:column-reverse}.fighter img{max-width:80%;height:56%;object-fit:contain;filter:drop-shadow(2px 5px 1px #34594860)}
+.hp-card{min-width:min(92%,145px);max-width:100%;background:#153730f2;border-radius:9px;border:1px solid #d6e6ce;padding:4px 8px;color:white;font-size:13px}
+.hp-card .row{gap:4px}.hp-card small{color:#e0e9da}.hp-card progress{display:block;width:100%;height:8px;accent-color:#79df86}.skill{flex:1 0 100px}
+.result-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:15rem;overflow-y:auto;font-size:14px}.thumb{padding:0;display:block;overflow:hidden;max-width:150px;margin-top:6px}.thumb img{display:block;width:100%;max-height:90px;object-fit:cover;object-position:top}
+dialog{width:min(540px,94vw);max-height:86dvh;margin:auto;border-radius:17px;background:var(--surface);border:1px solid var(--line-strong);color:var(--ink);padding:18px;box-shadow:var(--shadow);overflow-y:auto}
+dialog::backdrop{background:#02080bb0}dialog header{padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--line)}.full-image{max-width:100%;height:auto;display:block;margin:auto}
+.hero-mon{display:flex;align-items:center;gap:20px}.hero-mon img{width:120px;height:120px;object-fit:contain;background:var(--surface-soft);border-radius:18px}
+.stat-row,.rank-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}
+.stat-row meter{flex:1;max-width:65%;accent-color:var(--brand)}.chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px}.chart-grid img{width:100%;display:block}
+details{margin:8px 0}summary{cursor:pointer;font-weight:650}.list{display:grid;gap:6px}.list button{text-align:left}.stack>p{overflow-wrap:anywhere}.wide{width:100%}.subheading{margin:14px 0 7px}
+@media(max-width:760px){.layout{grid-template-columns:1fr}.rail{grid-template-columns:repeat(auto-fit,minmax(175px,1fr))}.game-shell{padding:10px}.scene{height:clamp(245px,57vw,355px);min-height:240px}.scene .map-pin{font-size:11px}.top{align-items:center}nav button{padding:.6em .83em}.grid{grid-template-columns:repeat(auto-fill,minmax(95px,1fr))}#trainer{flex-wrap:wrap;justify-content:flex-end;max-width:48%;gap:3px 8px}}
+@media(prefers-reduced-motion:no-preference){html:not([data-motion=off]) .party-sprite{animation:bob 3s ease-in-out infinite alternate}@keyframes bob{to{translate:0 -4px}}}
+.scene .map-avatar{position:absolute;width:clamp(30px,5vw,54px);height:24%;object-fit:contain;object-position:bottom;transform:translate(-50%,-103%);pointer-events:none;image-rendering:pixelated;filter:drop-shadow(1px 2px 1px #385d4380)}
+
+.scene .fighter {inset:0;width:100%;height:100%;pointer-events:none}
+.fighter img,.fighter .hp-card{position:absolute}
+.fighter.player img{width:35%;height:51%;left:25%;bottom:13%;transform:translateX(-50%)}
+.fighter.opponent img{width:26%;height:41%;left:73%;bottom:38%;transform:translateX(-50%)}
+.fighter.player .hp-card{left:7%;bottom:3%}.fighter.opponent .hp-card{right:5%;top:5%}
+.skill small{display:block;color:inherit;opacity:.86;font-size:11px}

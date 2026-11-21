@@ -178,6 +178,30 @@ def all_pokemon() -> List[Dict[str, Any]]:
     return result
 
 
+async def owned_entry(pid: int, level: int, info, star: int) -> Dict[str, Any]:
+    item = {
+        "id": pid,
+        "name": display_name(pid),
+        "level": int(level),
+        "star": int(star),
+        "types": types_of(pid),
+    }
+    if info and info != 0:
+        stats = await get_pokemon_shuxing(pid, info)
+        item.update(
+            {
+                "nature": info[13],
+                "iv": [int(x) for x in info[1:7]],
+                "ev": [int(x) for x in info[7:13]],
+                "held_item": info[16] or "",
+                "moves": [m for m in str(info[14] or "").split(",") if m],
+                "stats": dict(zip(STAT_NAMES, [int(x) for x in stats])),
+                "exp": int(info[15]),
+            }
+        )
+    return item
+
+
 async def owned_pokemon(uid: str, page: int = 0, page_size: int = 30) -> Dict[str, Any]:
     total = await pc.POKE._get_pokemon_num(uid)
     rows = await pc.POKE._get_pokemon_list(uid, page)
@@ -188,27 +212,7 @@ async def owned_pokemon(uid: str, page: int = 0, page_size: int = 30) -> Dict[st
         pid = int(bianhao)
         info = await get_pokeon_info(uid, pid)
         star = await pc.POKE.get_pokemon_star(uid, pid)
-        item = {
-            "id": pid,
-            "name": display_name(pid),
-            "level": int(level),
-            "star": int(star),
-            "types": types_of(pid),
-        }
-        if info and info != 0:
-            stats = await get_pokemon_shuxing(pid, info)
-            item.update(
-                {
-                    "nature": info[13],
-                    "iv": [int(x) for x in info[1:7]],
-                    "ev": [int(x) for x in info[7:13]],
-                    "held_item": info[16] or "",
-                    "moves": [m for m in str(info[14] or "").split(",") if m],
-                    "stats": dict(zip(STAT_NAMES, [int(x) for x in stats])),
-                    "exp": int(info[15]),
-                }
-            )
-        items.append(item)
+        items.append(await owned_entry(pid, level, info, star))
     return {
         "uid": uid,
         "total": int(total),

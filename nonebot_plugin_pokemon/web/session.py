@@ -5,6 +5,10 @@
 * key 使用宿主 ``account.qq``（+ 可信群，若有），不读取客户端声明的群；
 * 角色在创建/复用会话时更新，并传给每一条后续交互事件；
 * 管理员标记始终由角色推导，不能在第二次请求里用 ``is_admin`` 改写。
+
+新增的 ``act`` 是 QWeb 原生游戏动作入口：只接受 allow-list 动作，在会话锁内
+校验 operation/offset 并调用真实游戏处理器，旧 operation 在动作完成后立即
+失效，因此过期/replay 的回合会被拒绝。
 """
 
 from __future__ import annotations
@@ -12,15 +16,18 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
+from ..game.web_turn import turn_bot
 from ..compat.bot import Bot
 from ..compat.logger import logger
 from ..compat.sv import SV
 from ..identity import effective_role, is_admin_role
 from ..platform.interaction import broker
 from ..platform.message import OutMessage
+from ..platform.projection import accepted_reply_values, build_state, extract_options
 from ..platform.transport import WebTransport
+from ..game.actions import ALLOWED_ACTIONS, ActionError, owned_ids, resolve_action
 from ..game.runner import _buttons, _messages, _permission_ok, make_web_event
 
 
@@ -37,6 +44,8 @@ class _Session:
     error: str = ""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     operation: str = ""
+    turn: int = 0
+    last_action: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_admin(self) -> bool:
@@ -93,10 +102,119 @@ class WebSessionRegistry:
             await self._short_wait(session)
             return self._snapshot(session)
 
-    def _start(self, session: _Session, text: str) -> Optional[Dict[str, Any]]:
+    # ------------------------------------------------------------------ actions
+    async def act(
+        self,
+        session: _Session,
+        action: str,
+        value: Any = None,
+        operation: str = "",
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Execute one typed QWeb gameplay action under the registry lock.
+
+        An old ``operation`` (or a replay of a whole request body) is rejected
+        with HTTP 409 semantics; each accepted turn mints a new operation token.
+        """
+
+        async with session.lock:
+            if self._stale(session, operation, offset):
+                return self._snapshot(
+                    session,
+                    error="操作已过期，请刷新当前状态后重试。",
+                    offset=max(0, int(offset or 0)),
+                    stale=True,
+                )
+
+            action = str(action or "").strip()
+            if action not in ALLOWED_ACTIONS:
+                raise ActionError("不支持的游戏操作。")
+
+            if action == "cancel":
+                await self._cancel_locked(session)
+                self._advance(session, "cancel", None)
+                return self._snapshot(session, canceled=True)
+
+            if action == "reply":
+                if not (session.event is not None and broker.has_waiter(session.event.scene_key)):
+                    raise ActionError("当前没有等待回复的交互。", status_code=409)
+                canonical = self._legal_reply(session, value)
+                self._advance(session, "reply", canonical)
+                before = len(session.transport.outbox)
+                ev = make_web_event(
+                    canonical,
+                    user_id=session.user_id,
+                    group_id=session.group_id,
+                    user_name=session.user_name,
+                    is_admin=session.is_admin,
+                    role=session.role,
+                )
+                if not ev.raw_text:
+                    raise ActionError("回复内容为空。")
+                broker.feed(ev)
+                await self._wait_output(session, before, timeout=3.0)
+                return self._snapshot(session, offset=before)
+
+            if session.task is not None and not session.task.done():
+                if session.event is not None and broker.has_waiter(session.event.scene_key):
+                    raise ActionError("当前正在等待你的选择，请先回复或取消。", status_code=409)
+                return self._snapshot(session, error="上一条指令仍在执行，请稍候。")
+
+            owned: Optional[Sequence[int]] = None
+            if action in {"party", "equip"}:
+                owned = await owned_ids(session.user_id)
+            resolved = resolve_action(action, value, uid=session.user_id, owned=owned)
+            command = str(resolved.get("command") or "")
+            if not command:
+                raise ActionError("该操作没有可执行的游戏处理器。")
+            result = self._start(session, command, native=True)
+            session.last_action = {
+                "action": action,
+                "value": resolved.get("value"),
+            }
+            if result is not None:
+                return result
+            await self._short_wait(session)
+            return self._snapshot(session)
+
+    def _stale(self, session: _Session, operation: str, offset: int) -> bool:
+        operation = str(operation or "").strip()
+        if session.operation:
+            if not operation:
+                # A brand new session may act without a token; once a turn exists
+                # the caller must present the token from its latest snapshot.
+                return bool(session.turn)
+            return operation != session.operation or offset != len(session.transport.outbox)
+        if operation:
+            return True
+        try:
+            return int(offset or 0) > len(session.transport.outbox)
+        except (TypeError, ValueError):
+            return True
+
+    def _legal_reply(self, session: _Session, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ActionError("回复内容为空。")
+        if len(text) > 500:
+            raise ActionError("回复内容过长。")
+        accepted = accepted_reply_values(session.transport.outbox)
+        if not accepted:
+            return text
+        canonical = accepted.get(text)
+        if canonical is None:
+            raise ActionError("请选择当前可用的操作或技能。")
+        return canonical
+
+    def _advance(self, session: _Session, action: str, value: Any) -> None:
+        session.operation = uuid4().hex
+        session.turn += 1
+        session.last_action = {"action": action, "value": value}
+
+    def _start(self, session: _Session, text: str, *, native: bool = False) -> Optional[Dict[str, Any]]:
         # 新指令开始前先丢弃上一条指令的出站消息和等待事件，避免把旧连续交互
         # 的输出/状态带到新指令里。
-        session.operation = uuid4().hex
+        self._advance(session, "command", text)
         session.transport = WebTransport(
             user_id=session.user_id,
             user_name=session.user_name,
@@ -106,14 +224,7 @@ class WebSessionRegistry:
         session.bot = None
         session.error = ""
 
-        ev = make_web_event(
-            text,
-            user_id=session.user_id,
-            group_id=session.group_id,
-            user_name=session.user_name,
-            is_admin=session.is_admin,
-            role=session.role,
-        )
+        ev = self._make_event(text, session)
         if not ev.raw_text:
             return self._snapshot(session, error="请输入指令。")
         found = SV.find(ev.raw_text)
@@ -130,6 +241,7 @@ class WebSessionRegistry:
         session.bot = Bot(ev, session.transport)
 
         async def _run() -> None:
+            context = turn_bot.set(session.bot if native else None)
             try:
                 res = trigger.func(session.bot, ev)
                 if asyncio.iscoroutine(res):
@@ -140,13 +252,14 @@ class WebSessionRegistry:
                 logger.exception(f"[pokemon] 网页会话指令 {trigger.keyword} 失败: {exc}")
                 session.error = f"{type(exc).__name__}: {exc}"
             finally:
+                turn_bot.reset(context)
                 session.bot.release_interactions()
 
         session.task = asyncio.create_task(_run(), name=f"pokemon-web-{session.key}")
         return None
 
-    async def _feed(self, session: _Session, text: str) -> Dict[str, Any]:
-        ev = make_web_event(
+    def _make_event(self, text: str, session: _Session):
+        return make_web_event(
             text,
             user_id=session.user_id,
             group_id=session.group_id,
@@ -154,6 +267,9 @@ class WebSessionRegistry:
             is_admin=session.is_admin,
             role=session.role,
         )
+
+    async def _feed(self, session: _Session, text: str) -> Dict[str, Any]:
+        ev = self._make_event(text, session)
         if not ev.raw_text:
             return self._snapshot(session, error="请输入内容。")
         before = len(session.transport.outbox)
@@ -176,24 +292,58 @@ class WebSessionRegistry:
 
     def status(self, session: _Session, operation: str, offset: int) -> Dict[str, Any]:
         if operation and operation != session.operation:
-            return {"superseded": True, "done": True, "messages": []}
+            return {"superseded": True, "done": True, "messages": [], "state": build_state(
+                session.transport.projection,
+                operation=session.operation,
+                turn=session.turn,
+                awaiting=False,
+                done=True,
+                battle_view=session.transport.battle_view,
+            )}
         return self._snapshot(session, offset=offset)
 
-    def _snapshot(self, session: _Session, error: str = "", *, offset: int = 0) -> Dict[str, Any]:
+    def _snapshot(
+        self,
+        session: _Session,
+        error: str = "",
+        *,
+        offset: int = 0,
+        stale: bool = False,
+        canceled: bool = False,
+    ) -> Dict[str, Any]:
         outbox = session.transport.outbox[offset:]
         messages = _messages(outbox)
         tools = _buttons(outbox)
         awaiting = bool(session.event is not None and broker.has_waiter(session.event.scene_key))
         done = session.task is None or session.task.done()
+        effective_error = error or session.error
+        state = build_state(
+            session.transport.projection,
+            operation=session.operation,
+            turn=session.turn,
+            awaiting=awaiting,
+            done=done,
+            error=effective_error,
+            battle_view=session.transport.battle_view,
+        )
+        options = extract_options(session.transport.outbox, awaiting=awaiting)
         return {
-            "ok": not (error or session.error),
-            "error": error or session.error,
+            "ok": not effective_error,
+            "error": effective_error,
             "operation": session.operation,
+            "turn": session.turn,
             "offset": len(session.transport.outbox),
             "messages": messages,
             "buttons": tools,
+            "options": options,
+            "state": state,
+            "battle": state.get("battle"),
+            "legal_actions": list(ALLOWED_ACTIONS),
             "awaiting": awaiting,
             "done": done,
+            "stale": stale,
+            "canceled": canceled,
+            "last_action": dict(session.last_action),
             "text": "\n".join(m.get("text", "") for m in messages if m.get("text")),
             "images": [
                 seg["data"]
@@ -203,17 +353,21 @@ class WebSessionRegistry:
             ],
         }
 
+    async def _cancel_locked(self, session: _Session) -> None:
+        if session.task is not None and not session.task.done():
+            session.task.cancel()
+            try:
+                await session.task
+            except asyncio.CancelledError:
+                pass
+        if session.bot is not None:
+            session.bot.release_interactions()
+
     async def cancel(self, session: _Session) -> None:
         async with session.lock:
-            if session.task is not None and not session.task.done():
-                session.task.cancel()
-                try:
-                    await session.task
-                except asyncio.CancelledError:
-                    pass
-            if session.bot is not None:
-                session.bot.release_interactions()
-            session.error = "已取消当前连续交互。"
+            await self._cancel_locked(session)
+            session.transport.battle_view = None
+        session.error = "已取消当前连续交互。"
 
     def clear(self) -> None:
         """测试/停机用：清空所有网页会话。"""

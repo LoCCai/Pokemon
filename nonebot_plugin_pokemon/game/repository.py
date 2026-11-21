@@ -100,6 +100,7 @@ async def profile(uid: str) -> Dict[str, Any]:
         "score": int(score),
         "reputation": int(shengwang),
         "map": map_row[1],
+        "badges": int(map_row[0] or 0),
         "region": _region_of(map_row[1]),
         "pokemon_count": int(count),
         "team": team_items,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .message import OutMessage
 from .sender import SendResult, send_message
@@ -31,8 +31,23 @@ class WebTransport:
     outbox: List[OutMessage] = field(default_factory=list)
     results: List[SendResult] = field(default_factory=list)
     kind: str = "web"
+    battle_view: Optional[Dict[str, Any]] = None
+    # Passive semantic projection of the real core output. Never mutates the
+    # game, never recomputes formulas; see platform.projection.
+    projection: Dict[str, Any] = field(default_factory=dict)
+
+    def observe(self, message: OutMessage) -> None:
+        try:
+            from .projection import observe_message
+
+            observe_message(self.projection, message)
+        except Exception:
+            # Projection is a best-effort read-only side channel; it must never
+            # break the original gameplay send path.
+            pass
 
     async def send(self, message: OutMessage, at_sender: bool = False) -> SendResult:
+        self.observe(message)
         self.outbox.append(message)
         result = SendResult.from_message(message)
         self.results.append(result)

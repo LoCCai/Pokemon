@@ -167,7 +167,12 @@ setup_web(app, auth=auth, force=True)
 2. 后续 `POST /api/command` 直接把输入投递给等待队列；长耗时指令可用
    `GET /api/session?operation=...&offset=...` 轮询新输出；
 3. `POST /api/cancel` 取消当前连续交互；
-4. 页面刷新会丢失等待队列，需要重新发起。
+4. 网页打开或刷新时读取 `GET /api/session` 恢复当前回合。主进程重启或引擎超时后，需要重新发起行动。
+
+游戏页通过 `GET /api/game/world` 读取训练家、队伍、地图、背包和开放地点。精灵立绘由
+`GET /api/game/sprite/{id}` 提供。选择伙伴、移动、探索、出招等操作发送到
+`POST /api/game/action`，请求带宿主 CSRF 以及上个快照的 `operation` 和 `offset`。
+收到 409 时重新读取会话。野外遭遇的双方 HP、等级和招式由正在运行的战斗提供。
 
 服务端每个 `qweb:<qq>` 一个会话，串行执行；群 ID 不来自网页请求，网页会话固定
 不绑定群。相同 QQ 在不同宿主账号角色下会更新角色，但不会保留旧的管理员状态。

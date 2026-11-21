@@ -11,19 +11,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from ..compat.logger import logger
 from ..config import plugin_config
 from ..game import analytics, charts, repository
-from ..game.data import dex_entry, item_entry, move_entry
+from ..game import world as game_world
+from ..game.actions import ActionError
+from ..game.data import dex_entry, display_name, item_entry, move_entry, resolve_pokemon
 from ..llm.tools import TOOLS, ToolContextData
 from ..menu import PLUGIN_ID, VERSION, external_menu, help_cards
 from ..menu.catalog import build_entries, category_index, search_entries as search_menu
-from ..paths import STATIC_DIR
+from ..paths import STATIC_DIR, pokemon_data_dir
 from .auth import (
     AuthDependencies,
     HOST_MODULE,
@@ -34,6 +38,98 @@ from .auth import (
     unavailable_auth,
 )
 from .session import registry
+
+_SPRITE_MEDIA = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+class GameActionPayload(BaseModel):
+    """Typed action shape. Extra fields are ignored and never trusted."""
+
+    action: str
+    value: Any = None
+    operation: str = ""
+    offset: int = Field(default=0, ge=0)
+
+
+def _sprite_path(pid: int) -> Optional[str]:
+    """Resolve genuine local art by the exact name the core uses; no user path."""
+
+    base = pokemon_data_dir() / "resource" / "icon"
+    names = [display_name(pid), str(pid)]
+    for name in dict.fromkeys(names):
+        for suffix in _SPRITE_MEDIA:
+            candidate = base / f"{name}{suffix}"
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return str(candidate)
+            except OSError:
+                continue
+    return None
+
+
+def _sprite_response(path: Optional[str], pid: int) -> Response:
+    if path:
+        media = _SPRITE_MEDIA.get(Path(path).suffix.lower(), "application/octet-stream")
+        return FileResponse(
+            path,
+            media_type=media,
+            headers={
+                "Cache-Control": "private, max-age=86400",
+                "X-Pokemon-Sprite": "local",
+                "X-Pokemon-Sprite-Id": str(pid),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    try:
+        from ..resources.downloader import enqueue_missing
+
+        enqueue_missing(pokemon_data_dir() / "resource" / "icon" / f"{display_name(pid)}.png")
+    except Exception:
+        pass
+    fallback = STATIC_DIR / "pokemon-fallback.png"
+    if fallback.is_file():
+        return FileResponse(
+            fallback,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "private, max-age=20",
+                "X-Pokemon-Sprite": "fallback",
+                "X-Pokemon-Sprite-Id": str(pid),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    # Defensive last resort: a deterministic packaged PNG is still required.
+    import base64
+
+    return Response(
+        content=base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "X-Pokemon-Sprite": "fallback",
+            "X-Pokemon-Sprite-Id": str(pid),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _asset_response(filename: str, media_type: str) -> FileResponse:
+    # Exact filename allow-list only; callers never supply a path.
+    file = STATIC_DIR / filename
+    if not file.is_file():
+        raise HTTPException(status_code=404, detail="静态资源缺失")
+    return FileResponse(
+        file,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 def account_context(account: WebAccount) -> ToolContextData:
@@ -221,6 +317,59 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
         await registry.cancel(session)
         return {"ok": True}
 
+    # ------------------------------------------------------------ 原生网页玩法
+    @router.get("/api/game/world")
+    async def game_world_state(ctx: ToolContextData = Depends(member_context)) -> Dict[str, Any]:
+        data = await game_world.world(ctx.user_id)
+        session = registry.get(ctx.user_id, None, ctx.user_name, ctx.is_admin, ctx.role)
+        data["identity"] = {"is_admin": ctx.is_admin}
+        data["session"] = registry.status(session, "", len(session.transport.outbox))
+        return data
+
+    @router.get("/api/game/sprite/{pokemon_id}")
+    async def game_sprite(
+        pokemon_id: str,
+        _ctx: ToolContextData = Depends(member_context),
+    ) -> Response:
+        pid = resolve_pokemon(pokemon_id)
+        if not pid:
+            raise HTTPException(status_code=404, detail="没有找到该宝可梦")
+        return _sprite_response(_sprite_path(pid), pid)
+
+    @router.post("/api/game/action", dependencies=[csrf])
+    async def game_action(
+        payload: GameActionPayload,
+        ctx: ToolContextData = Depends(member_context),
+    ) -> Response:
+        session = registry.get(ctx.user_id, None, ctx.user_name, ctx.is_admin, ctx.role)
+        try:
+            result = await registry.act(
+                session,
+                payload.action,
+                payload.value,
+                payload.operation,
+                payload.offset,
+            )
+        except ActionError as exc:
+            snapshot = registry.status(session, session.operation, 0)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    **snapshot,
+                    "ok": False,
+                    "error": exc.message,
+                    "stale": False,
+                    "action": payload.action,
+                    "session": {"user_id": ctx.user_id},
+                },
+            )
+        status_code = 409 if result.get("stale") else 200
+        result["action"] = (result.get("last_action") or {}).get("action") or payload.action
+        result["session"] = {"user_id": ctx.user_id}
+        if status_code != 200:
+            return JSONResponse(status_code=status_code, content=result)
+        return result
+
     # ----------------------------------------------------------------- 管理
     @router.get("/api/admin/state")
     async def admin_state(ctx: ToolContextData = Depends(admin_context)) -> Dict[str, Any]:
@@ -277,7 +426,24 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
     # ----------------------------------------------------------------- 页面
     @router.get("/static/app.js", include_in_schema=False)
     async def page_script(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
-        return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")
+        return _asset_response("app.js", "application/javascript")
+
+    @router.get("/static/qweb-theme.js", include_in_schema=False)
+    async def qweb_theme_script(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
+        return _asset_response("qweb-theme.js", "application/javascript")
+
+    @router.get("/static/game.css", include_in_schema=False)
+    async def game_stylesheet(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
+        return _asset_response("game.css", "text/css")
+
+    @router.get("/static/trainer.png", include_in_schema=False)
+    async def trainer_sprite(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
+        file = STATIC_DIR.parents[1] / "Pokemon/pokemon_duel/texture2D/trainers/背包客.png"
+        return FileResponse(file, media_type="image/png")
+
+    @router.get("/static/game.js", include_in_schema=False)
+    async def game_script(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
+        return _asset_response("game.js", "application/javascript")
 
     @router.get("", response_class=HTMLResponse)
     @router.get("/", response_class=HTMLResponse)

@@ -4,6 +4,7 @@ import random
 import math
 import textwrap
 import json
+from ...game.web_turn import choose_move, project_round, turn_bot
 from PIL import Image, ImageDraw
 from nonebot_plugin_pokemon.compat.media import open_image
 import copy
@@ -847,9 +848,12 @@ async def pokemon_fight(
         myjinenglist = re.split(',', mypokemon_info[14])
         dijinenglist = re.split(',', dipokemon_info[14])
         
-        jineng1 = await now_use_jineng(
-            myinfo, diinfo, myjinenglist, dijinenglist, changdi
-        )
+        if turn_bot.get() is not None:
+            jineng1 = await choose_move(myinfo, diinfo, myjinenglist, shul, mesg)
+        else:
+            jineng1 = await now_use_jineng(
+                myinfo, diinfo, myjinenglist, dijinenglist, changdi
+            )
         jinenginfo1 = JINENG_LIST[jineng1]
         jineng2 = await now_use_jineng(
             diinfo, myinfo, dijinenglist, myjinenglist, changdi
@@ -1218,6 +1222,7 @@ async def pokemon_fight(
         last_jineng2 = jineng2
         if jieshu == 1:
             fight_flag = 1
+    project_round(myinfo, diinfo, shul - 1, finished=True)
     return mesg, myinfo, diinfo, myzhuangtai, dizhuangtai, changdi
 
 
@@ -1272,9 +1277,12 @@ async def pokemon_fight_s(
         # except asyncio.TimeoutError:
         # jineng1 = await now_use_jineng(myinfo,diinfo,myjinenglist,dijinenglist,changdi)
         
-        jineng1 = await now_use_jineng(
-            myinfo, diinfo, myjinenglist, dijinenglist, changdi
-        )
+        if turn_bot.get() is not None:
+            jineng1 = await choose_move(myinfo, diinfo, myjinenglist, shul, mesg)
+        else:
+            jineng1 = await now_use_jineng(
+                myinfo, diinfo, myjinenglist, dijinenglist, changdi
+            )
         jinenginfo1 = JINENG_LIST[jineng1]
         jineng2 = await now_use_jineng(
             diinfo, myinfo, dijinenglist, myjinenglist, changdi
@@ -1723,6 +1731,7 @@ async def pokemon_fight_s(
         last_jineng2 = jineng2
         if jieshu == 1:
             fight_flag = 1
+    project_round(myinfo, diinfo, shul - 1, finished=True)
     return (
         bg_img,
         img_height,
