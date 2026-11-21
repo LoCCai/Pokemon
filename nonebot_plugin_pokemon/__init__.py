@@ -68,13 +68,16 @@ if _driver is not None:
         global _started
         if _started or not plugin_config.pokemon_enabled:
             return
-        _started = True
 
         from .compat.aps import scheduler
         from .compat.logger import logger
         from .menu import write_external_menu
         from .resources.downloader import start_worker
 
+        from .Pokemon.utils.dbbase.storage import verify_schema
+
+        await verify_schema()
+        _started = True
         scheduler.start()
         start_worker()
 
@@ -115,6 +118,12 @@ if _driver is not None:
 
         broker.clear()
         await scheduler.shutdown()
+        try:
+            from .Pokemon.utils.dbbase.storage import close_storage
+
+            await close_storage()
+        except Exception:
+            pass
 
     @_driver.on_bot_connect
     async def _pokemon_bot_connect(bot) -> None:

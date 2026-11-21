@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
-
 from ..Pokemon.pokemon_duel import pokeconfg as pc
-from ..Pokemon.utils.dbbase.PokeCounter import DB_PATH
+from ..Pokemon.utils.dbbase.storage import fetchall
 from .data import display_name, owned_pokemon, types_of
 
 
@@ -119,13 +117,11 @@ async def owned(uid: str, page: int = 0) -> Dict[str, Any]:
 
 
 async def score_leaderboard(limit: int = 20) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT s.UID, s.SCORE, s.SHENGWANG, m.NICKNAME FROM POKEMON_SCORE s "
-            "LEFT JOIN POKEMON_MAP m ON m.UID = s.UID ORDER BY s.SCORE DESC LIMIT ?",
-            (int(limit),),
-        )
-        rows = await cursor.fetchall()
+    rows = await fetchall(
+        "select s.uid, s.score, s.shengwang, m.nickname from pokemon_score s "
+        "left join pokemon_map m on m.uid = s.uid order by s.score desc limit ?",
+        (int(limit),),
+    )
     return [
         {"uid": row[0], "score": int(row[1]), "reputation": int(row[2]), "nickname": row[3] or row[0]}
         for row in rows
@@ -133,12 +129,10 @@ async def score_leaderboard(limit: int = 20) -> List[Dict[str, Any]]:
 
 
 async def pokedex_leaderboard(limit: int = 20) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT UID, COUNT(*) AS NUM FROM POKEMON_TABLE GROUP BY UID ORDER BY NUM DESC LIMIT ?",
-            (int(limit),),
-        )
-        rows = await cursor.fetchall()
+    rows = await fetchall(
+        "select uid, count(*) as num from pokemon_table group by uid order by num desc limit ?",
+        (int(limit),),
+    )
     return [{"uid": row[0], "unique_pokemon": int(row[1])} for row in rows]
 
 

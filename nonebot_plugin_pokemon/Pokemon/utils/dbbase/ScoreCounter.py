@@ -1,179 +1,176 @@
+import json
 import os
-import asyncio
 import sqlite3
-import aiosqlite
-from ..resource.RESOURCE_PATH import MAIN_PATH
 
-DB_PATH = os.path.expanduser(MAIN_PATH / 'pokemon.db')
+from .storage import (
+    SQLITE_DB_PATH,
+    execute,
+    execute_sync,
+    fetchone,
+    fetchone_sync,
+    is_postgres,
+)
+
+DB_PATH = SQLITE_DB_PATH
 
 
 class SCORE_DB:
     def __init__(self):
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        self._create_table()
+        # PG schema 由部署方导入；运行时只做 DML。
+        if not is_postgres():
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+            self._create_table()
 
     def _connect(self):
         return sqlite3.connect(DB_PATH)
 
     def _create_table(self):
         try:
-            self._connect().execute(
-                """CREATE TABLE IF NOT EXISTS POKEMON_SCORE
-                          (UID             TEXT   NOT NULL,
-                           SCORE           INT    NOT NULL,
-                           SHENGWANG       INT    NOT NULL,
-                           PRIMARY KEY(UID));"""
-            )
-        except:
+            with self._connect() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS POKEMON_SCORE
+                              (UID             TEXT   NOT NULL,
+                               SCORE           INT    NOT NULL,
+                               SHENGWANG       INT    NOT NULL,
+                               PRIMARY KEY(UID));"""
+                )
+        except Exception:
             raise Exception('创建表发生错误')
 
     async def _new_score(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"INSERT OR REPLACE INTO POKEMON_SCORE (UID,SCORE,SHENGWANG) VALUES ('{uid}',0,0)")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        # 只保证行存在，不能把并发创建者已有的积分重置为 0。
+        await execute(
+            "insert into pokemon_score (uid,score,shengwang) values (?,?,?) "
+            "on conflict (uid) do nothing",
+            (str(uid), 0, 0),
+        )
+
     async def delete_score(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"DELETE FROM POKEMON_SCORE WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute("delete from pokemon_score where uid=?", (str(uid),))
+
     async def change_score(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_SCORE SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_score set uid=? where uid=?",
+            (str(newuid), str(olduid)),
+        )
+
     async def get_score(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT SCORE FROM POKEMON_SCORE WHERE UID='{uid}'")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r[0][0]
-        else:
-            await self._new_score(uid)
-            return 0
+        row = await fetchone(
+            "select score from pokemon_score where uid=?",
+            (str(uid),),
+        )
+        if row:
+            return int(row[0])
+        await self._new_score(uid)
+        return 0
 
     async def update_score(self, uid, score):
-        now_score = await self.get_score(uid) + score
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_SCORE SET SCORE = {now_score} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        # 原子增量：不再 SELECT 后 SET，避免并发丢失更新。
+        await execute(
+            "insert into pokemon_score (uid,score,shengwang) values (?,?,?) "
+            "on conflict (uid) do update set score=pokemon_score.score+excluded.score",
+            (str(uid), int(score), 0),
+        )
+
     async def get_shengwang(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT SHENGWANG FROM POKEMON_SCORE WHERE UID='{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                await self._new_score(uid)
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select shengwang from pokemon_score where uid=?",
+            (str(uid),),
+        )
+        if row:
+            return int(row[0])
+        await self._new_score(uid)
+        return 0
 
     async def update_shengwang(self, uid, shengwang):
-        now_shengwang = await self.get_shengwang(uid) + shengwang
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_SCORE SET SHENGWANG = {now_shengwang} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_score (uid,score,shengwang) values (?,?,?) "
+            "on conflict (uid) do update set shengwang=pokemon_score.shengwang+excluded.shengwang",
+            (str(uid), 0, int(shengwang)),
+        )
+
 
 class RecordDAO:
+    """同步限次记录。
+
+    SQLite 仍使用原来的同步 sqlite3；PG 使用独立同步连接池（psycopg_pool），
+    以便现有 ``DailyAmountLimiter.check()/increase()`` 这类同步调用继续工作。
+    """
+
     def __init__(self):
         self.db_path = DB_PATH
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        self._create_table()
+        if not is_postgres():
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+            self._create_table()
 
     def connect(self):
         return sqlite3.connect(self.db_path)
 
     def _create_table(self):
+        if is_postgres():
+            return
         with self.connect() as conn:
             conn.execute(
                 'CREATE TABLE IF NOT EXISTS limiter'
                 '(key TEXT NOT NULL, num INT NOT NULL, date INT, PRIMARY KEY(key))'
             )
 
+    @staticmethod
+    def _key(key):
+        # 旧实现把 tuple 直接绑给 sqlite3（实际无法绑定）。这里统一成稳定文本，
+        # 既让 SQLite 限次真正生效，也让 PG 的 TEXT 主键可用。
+        if isinstance(key, (tuple, list)):
+            return json.dumps([str(item) for item in key], ensure_ascii=False, separators=(",", ":"))
+        return str(key)
+
     def exist_check(self, key):
-        try:
-            key = str(key)
-            with self.connect() as conn:
-                conn.execute(
-                    'INSERT INTO limiter (key,num,date) VALUES (?, 0,-1)',
-                    (key,),
-                )
-            return
-        except:
-            return
+        execute_sync(
+            "insert into limiter (key,num,date) values (?,?,?) "
+            "on conflict (key) do nothing",
+            (self._key(key), 0, -1),
+        )
 
     def get_num(self, key):
-        self.exist_check(key)
-        key = str(key)
-        with self.connect() as conn:
-            r = conn.execute(
-                'SELECT num FROM limiter WHERE key=? ', (key,)
-            ).fetchall()
-            r2 = r[0]
-        return r2[0]
+        record_key = self._key(key)
+        self.exist_check(record_key)
+        row = fetchone_sync(
+            "select num from limiter where key=?",
+            (record_key,),
+        )
+        return int(row[0]) if row else 0
 
     def clear_key(self, key):
-        key = str(key)
-        self.exist_check(key)
-        with self.connect() as conn:
-            conn.execute(
-                'UPDATE limiter SET num=0 WHERE key=?',
-                (key,),
-            )
+        record_key = self._key(key)
+        self.exist_check(record_key)
+        execute_sync(
+            "update limiter set num=? where key=?",
+            (0, record_key),
+        )
 
     def increment_key(self, key, num):
-        self.exist_check(key)
-        key = str(key)
-        with self.connect() as conn:
-            conn.execute(
-                'UPDATE limiter SET num=num+? WHERE key=?',
-                (
-                    num,
-                    key,
-                ),
-            )
+        record_key = self._key(key)
+        self.exist_check(record_key)
+        execute_sync(
+            "update limiter set num=num+? where key=?",
+            (int(num), record_key),
+        )
 
     def get_date(self, key):
-        self.exist_check(key)
-        key = str(key)
-        with self.connect() as conn:
-            r = conn.execute(
-                'SELECT date FROM limiter WHERE key=? ', (key,)
-            ).fetchall()
-            r2 = r[0]
-        return r2[0]
+        record_key = self._key(key)
+        self.exist_check(record_key)
+        row = fetchone_sync(
+            "select date from limiter where key=?",
+            (record_key,),
+        )
+        return int(row[0]) if row else 0
 
     def set_date(self, date, key):
-        print(date)
-        self.exist_check(key)
-        key = str(key)
-        with self.connect() as conn:
-            conn.execute(
-                'UPDATE limiter SET date=? WHERE key=?',
-                (
-                    date,
-                    key,
-                ),
-            )
+        record_key = self._key(key)
+        self.exist_check(record_key)
+        execute_sync(
+            "update limiter set date=? where key=?",
+            (int(date), record_key),
+        )
+
+
+__all__ = ["DB_PATH", "RecordDAO", "SCORE_DB"]

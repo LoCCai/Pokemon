@@ -1,14 +1,44 @@
 import os
-import asyncio
 import sqlite3
-import aiosqlite
-from ..resource.RESOURCE_PATH import MAIN_PATH
 
-DB_PATH = os.path.expanduser(MAIN_PATH / 'pokemon.db')
+from .storage import (
+    SQLITE_DB_PATH,
+    execute,
+    execute_returning,
+    fetchall,
+    fetchone,
+    is_postgres,
+)
+
+DB_PATH = SQLITE_DB_PATH
+
+
+def _int(value):
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(float(value))
+
+
+def _text(value):
+    return "" if value is None else str(value)
+
+
+def _clamp_zero(expression):
+    # SQLite 用 max()，PostgreSQL 用 greatest()；expression 必须是静态片段。
+    return f"greatest(0, {expression})" if is_postgres() else f"max(0, {expression})"
 
 
 class PokeCounter:
     def __init__(self):
+        # PostgreSQL 的表结构、索引与数据迁移由部署方负责。运行时只使用表，
+        # 绝不在 PG 中执行 CREATE/ALTER；启动预检见 storage.verify_schema()。
+        if is_postgres():
+            return
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self._create_table()
         self._create_table_map()
@@ -72,7 +102,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_group(self):
         try:
             self._connect().execute(
@@ -130,7 +160,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_map_refresh(self):
         try:
             self._connect().execute(
@@ -142,7 +172,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_refresh_send(self):
         try:
             self._connect().execute(
@@ -153,7 +183,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_exchange(self):
         try:
             self._connect().execute(
@@ -169,7 +199,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_technical(self):
         try:
             self._connect().execute(
@@ -181,7 +211,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_boss_fight(self):
         try:
             self._connect().execute(
@@ -193,7 +223,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_chongsheng_num(self):
         try:
             self._connect().execute(
@@ -205,7 +235,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_pipei_table(self):
         try:
             self._connect().execute(
@@ -219,7 +249,7 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_table_dungeon(self):
         try:
             self._connect().execute(
@@ -230,932 +260,631 @@ class PokeCounter:
             )
         except:
             raise Exception('创建表发生错误')
-    
+
     def _create_mapauto_add(self):
         with self._connect() as conn:
             r = conn.execute("select sql from sqlite_master where type='table' and name='POKEMON_MAP';").fetchall()
             if 'AUTOFLAG' not in str(r):
                 conn.execute("ALTER TABLE POKEMON_MAP ADD AUTOFLAG INT DEFAULT 0;").fetchall()
                 conn.execute("ALTER TABLE POKEMON_MAP ADD AUTOTIME INT DEFAULT 0;").fetchall()
-    
+
     def _create_map_pipei_add(self):
         with self._connect() as conn:
             r = conn.execute("select sql from sqlite_master where type='table' and name='POKEMON_MAP';").fetchall()
             if 'PIPEI' not in str(r):
                 period = 0
                 conn.execute(f"ALTER TABLE POKEMON_MAP ADD PIPEI INT DEFAULT {period};").fetchall()
-    
+
     def _create_poketable_add(self):
         with self._connect() as conn:
             r = conn.execute("select sql from sqlite_master where type='table' and name='POKEMON_TABLE';").fetchall()
             if 'XIEDAI' not in str(r):
                 conn.execute("ALTER TABLE POKEMON_TABLE ADD XIEDAI TEXT DEFAULT '';").fetchall()
-    
+
     def _truncate_table_pipei(self):
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM POKE_PIPEI WHERE UID <>''"
             )
-    
+
     async def _new_dungeon_info(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKE_DUNGEON (UID,NUM) VALUES (?,?)',
-                (uid, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def update_dungeon(self,uid,dungeonnum):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKE_DUNGEON SET NUM={dungeonnum} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_dungeon_info(self,uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT NUM FROM POKE_DUNGEON WHERE UID='{uid}'")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r[0][0]
-        else:
-            await self._new_dungeon_info(uid)
-            return 0
-    
+        await execute(
+            "insert into poke_dungeon (uid,num) values (?,?) on conflict (uid) do nothing",
+            (_text(uid), 0),
+        )
+
+    async def update_dungeon(self, uid, dungeonnum):
+        await execute(
+            "update poke_dungeon set num=? where uid=?",
+            (_int(dungeonnum), _text(uid)),
+        )
+
+    async def get_dungeon_info(self, uid):
+        row = await fetchone(
+            "select num from poke_dungeon where uid=?",
+            (_text(uid),),
+        )
+        if row:
+            return int(row[0])
+        await self._new_dungeon_info(uid)
+        return 0
+
     async def get_dungeon_list(self):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT UID,NUM FROM POKE_DUNGEON WHERE NUM > 0 ORDER BY NUM DESC LIMIT 0,30")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r
-        else:
-            await self._new_dungeon_info(uid)
-            return 0
-    
+        rows = await fetchall(
+            "select uid,num from poke_dungeon where num>0 order by num desc limit ? offset ?",
+            (30, 0),
+        )
+        return rows if rows else 0
+
     async def _new_pipei_info(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKE_PIPEI (UID,FLAG,FIGHTID,DIUID,FIGHTTYPE) VALUES (?,?,?,?,?)',
-                (uid, 0, 0, 0, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def update_pipei_flag(self,uid,diuid,fightid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKE_PIPEI (UID,FLAG,FIGHTID,DIUID,FIGHTTYPE) VALUES (?,?,?,?,?)',
-                (uid, 1, fightid, diuid, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def update_pipei_fight(self,uid,fighttype):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKE_PIPEI SET FIGHTTYPE={fighttype} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def delete_pipei_uid(self,uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"DELETE FROM POKE_PIPEI WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_pipei_list(self,uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT UID FROM POKE_PIPEI WHERE FLAG=0 AND UID<>'{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def get_pipei_info(self,uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT FLAG,FIGHTID,DIUID,FIGHTTYPE FROM POKE_PIPEI WHERE UID='{uid}'")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r[0]
-        else:
-            return 0
-    
+        await execute(
+            "insert into poke_pipei (uid,flag,fightid,diuid,fighttype) values (?,?,?,?,?) "
+            "on conflict (uid) do update set flag=excluded.flag, fightid=excluded.fightid, "
+            "diuid=excluded.diuid, fighttype=excluded.fighttype",
+            (_text(uid), 0, "0", "0", 0),
+        )
+
+    async def update_pipei_flag(self, uid, diuid, fightid):
+        await execute(
+            "insert into poke_pipei (uid,flag,fightid,diuid,fighttype) values (?,?,?,?,?) "
+            "on conflict (uid) do update set flag=excluded.flag, fightid=excluded.fightid, "
+            "diuid=excluded.diuid, fighttype=excluded.fighttype",
+            (_text(uid), 1, _text(fightid), _text(diuid), 0),
+        )
+
+    async def update_pipei_fight(self, uid, fighttype):
+        await execute(
+            "update poke_pipei set fighttype=? where uid=?",
+            (_int(fighttype), _text(uid)),
+        )
+
+    async def delete_pipei_uid(self, uid):
+        await execute("delete from poke_pipei where uid=?", (_text(uid),))
+
+    async def get_pipei_list(self, uid):
+        rows = await fetchall(
+            "select uid from poke_pipei where flag=? and uid<>?",
+            (0, _text(uid)),
+        )
+        return rows if rows else 0
+
+    async def get_pipei_info(self, uid):
+        row = await fetchone(
+            "select flag,fightid,diuid,fighttype from poke_pipei where uid=?",
+            (_text(uid),),
+        )
+        return row if row else 0
+
     async def _new_chongsheng_num(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO CHONGSHENG (UID,BIANHAO,NUM) VALUES (?,?,?)',
-                (uid, bianhao, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_chongsheng_num(self,uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM CHONGSHENG WHERE UID='{uid}' AND BIANHAO = {bianhao}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                await self._new_chongsheng_num(uid, bianhao)
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def update_chongsheng(self,uid,bianhao,num):
-        chongsheng_num = await self.get_chongsheng_num(uid, bianhao)
-        now_num = int(chongsheng_num) + num
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE CHONGSHENG SET NUM={now_num} WHERE UID='{uid}' AND BIANHAO = {bianhao}")
-            await connection.commit()
-            await connection.close()
-            return now_num
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_boss_shanghai(self,uid,week):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT SHANGHAI FROM BOSS_FIGHT WHERE UID='{uid}' AND TIME = {week}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        # 旧逻辑在达成奖励后把计数重置为 0，这里保持 replace 语义。
+        await execute(
+            "insert into chongsheng (uid,bianhao,num) values (?,?,?) "
+            "on conflict (uid,bianhao) do update set num=excluded.num",
+            (_text(uid), _int(bianhao), 0),
+        )
+
+    async def get_chongsheng_num(self, uid, bianhao):
+        row = await fetchone(
+            "select num from chongsheng where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
+        if row:
+            return int(row[0])
+        await self._new_chongsheng_num(uid, bianhao)
+        return 0
+
+    async def update_chongsheng(self, uid, bianhao, num):
+        row = await execute_returning(
+            "insert into chongsheng (uid,bianhao,num) values (?,?,?) "
+            "on conflict (uid,bianhao) do update set num=chongsheng.num+excluded.num returning num",
+            (_text(uid), _int(bianhao), _int(num)),
+        )
+        return int(row[0]) if row else 0
+
+    async def get_boss_shanghai(self, uid, week):
+        row = await fetchone(
+            "select shanghai from boss_fight where uid=? and time=?",
+            (_text(uid), _int(week)),
+        )
+        return int(row[0]) if row else 0
+
     async def _new_boss_shanghai(self, uid, shanghai, week):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO BOSS_FIGHT (UID,SHANGHAI,TIME) VALUES (?,?,?)',
-                (uid, shanghai, week),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_boss_shanghai_list(self,week):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT UID,SHANGHAI FROM BOSS_FIGHT WHERE TIME = {week} ORDER BY CAST(SHANGHAI AS NUMERIC) DESC LIMIT 0,50")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        expression = (
+            "greatest(boss_fight.shanghai, excluded.shanghai)"
+            if is_postgres()
+            else "max(boss_fight.shanghai, excluded.shanghai)"
+        )
+        await execute(
+            "insert into boss_fight (uid,shanghai,time) values (?,?,?) "
+            f"on conflict (uid,time) do update set shanghai={expression}",
+            (_text(uid), _int(shanghai), _int(week)),
+        )
+
+    async def get_boss_shanghai_list(self, week):
+        rows = await fetchall(
+            "select uid,shanghai from boss_fight where time=? "
+            "order by cast(shanghai as numeric) desc limit ? offset ?",
+            (_int(week), 50, 0),
+        )
+        return rows if rows else 0
+
     async def get_game_user_list(self):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT UID FROM POKEMON_MAP WHERE HUIZHANG>0")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        rows = await fetchall("select uid from pokemon_map where cast(huizhang as bigint)>0")
+        return rows if rows else 0
+
     async def get_pokemon_technical_list(self, uid, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT PROP,NUM FROM PROP_TECHNICAL WHERE UID='{uid}' AND NUM>0 ORDER BY NUM DESC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            if r:
-                cursornum = await connection.execute(f"SELECT COUNT(PROP) AS PROPNUM FROM PROP_TECHNICAL WHERE UID='{uid}' AND NUM>0")
-                num = await cursornum.fetchall()
-                await connection.close()
-                return num[0][0],r
-            else:
-                await connection.close()
-                return 0,0
-        except:
-            raise Exception('查找表发生错误')
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select prop,num from prop_technical where uid=? and num>0 "
+            "order by num desc limit ? offset ?",
+            (_text(uid), num, startnum),
+        )
+        if not rows:
+            return 0, 0
+        count_row = await fetchone(
+            "select count(prop) as propnum from prop_technical where uid=? and num>0",
+            (_text(uid),),
+        )
+        total = int(count_row[0]) if count_row else 0
+        return total, rows
 
     async def _new_pokemon_technical(self, uid, propname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO PROP_TECHNICAL (UID,PROP,NUM) VALUES (?,?,?)',
-                (uid, propname, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into prop_technical (uid,prop,num) values (?,?,?) "
+            "on conflict (uid,prop) do nothing",
+            (_text(uid), _text(propname), 0),
+        )
 
     async def _get_pokemon_technical(self, uid, propname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM PROP_TECHNICAL WHERE UID='{uid}' AND PROP='{propname}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                await self._new_pokemon_technical(uid, propname)
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select num from prop_technical where uid=? and prop=?",
+            (_text(uid), _text(propname)),
+        )
+        if row:
+            return int(row[0])
+        await self._new_pokemon_technical(uid, propname)
+        return 0
 
     async def _add_pokemon_technical(self, uid, propname, num):
-        now_num = await self._get_pokemon_technical(uid, propname) + int(num)
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO PROP_TECHNICAL (UID,PROP,NUM) VALUES (?,?,?)',
-                (uid, propname, now_num),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def delete_technical_uid(self,uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM PROP_TECHNICAL WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "insert into prop_technical (uid,prop,num) values (?,?,?) "
+            "on conflict (uid,prop) do update set num=prop_technical.num+excluded.num",
+            (_text(uid), _text(propname), _int(num)),
+        )
+
+    async def delete_technical_uid(self, uid):
+        await execute("delete from prop_technical where uid=?", (_text(uid),))
+
     async def change_technical_uid(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE PROP_TECHNICAL SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
-    async def new_exchange(self,exchangeid,proptype,propname,num,uid,score,uptime):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO PROP_EXCHANGE (EXCHANGEID,PROPTYPE,PROPNAME,NUM,UID,SCORE,UPTIME) VALUES (?,?,?,?,?,?,?)',
-                (exchangeid,proptype,propname,num,uid,score,uptime),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def update_exchange(self,exchangeid,num):
-        exchange_num = await self._get_exchange_num(exchangeid)
-        now_num = int(exchange_num) + num
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                f"UPDATE PROP_EXCHANGE SET NUM={now_num} WHERE EXCHANGEID='{exchangeid}'"
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def _get_exchange_num(self,exchangeid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM PROP_EXCHANGE WHERE EXCHANGEID='{exchangeid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def _get_exchange_info(self,exchangeid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT PROPTYPE,PROPNAME,NUM,UID,SCORE FROM PROP_EXCHANGE WHERE EXCHANGEID='{exchangeid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def delete_exchange(self,exchangeid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM PROP_EXCHANGE WHERE EXCHANGEID='{exchangeid}'")
-        await connection.commit()
-        await connection.close()
-    
-    async def delete_exchange_uid(self,uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM PROP_EXCHANGE WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update prop_technical set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
+    async def new_exchange(self, exchangeid, proptype, propname, num, uid, score, uptime):
+        await execute(
+            "insert into prop_exchange (exchangeid,proptype,propname,num,uid,score,uptime) "
+            "values (?,?,?,?,?,?,?) on conflict (exchangeid) do update set "
+            "proptype=excluded.proptype, propname=excluded.propname, num=excluded.num, "
+            "uid=excluded.uid, score=excluded.score, uptime=excluded.uptime",
+            (
+                _text(exchangeid),
+                _text(proptype),
+                _text(propname),
+                _int(num),
+                _text(uid),
+                _int(score),
+                _int(uptime),
+            ),
+        )
+
+    async def update_exchange(self, exchangeid, num):
+        # 旧 SQLite 中 NUM 是 TEXT；显式 CAST 让 PG/SQLite 都能做原子加法。
+        await execute(
+            "update prop_exchange set num=cast(num as bigint)+? where exchangeid=?",
+            (_int(num), _text(exchangeid)),
+        )
+
+    async def _get_exchange_num(self, exchangeid):
+        row = await fetchone(
+            "select num from prop_exchange where exchangeid=?",
+            (_text(exchangeid),),
+        )
+        return row[0] if row else 0
+
+    async def _get_exchange_info(self, exchangeid):
+        row = await fetchone(
+            "select proptype,propname,num,uid,score from prop_exchange where exchangeid=?",
+            (_text(exchangeid),),
+        )
+        return row if row else 0
+
+    async def delete_exchange(self, exchangeid):
+        await execute("delete from prop_exchange where exchangeid=?", (_text(exchangeid),))
+
+    async def delete_exchange_uid(self, uid):
+        await execute("delete from prop_exchange where uid=?", (_text(uid),))
+
     async def change_exchange_uid(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE PROP_EXCHANGE SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update prop_exchange set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def get_exchange_list(self, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT EXCHANGEID,PROPTYPE,PROPNAME,NUM,SCORE FROM PROP_EXCHANGE WHERE NUM>0 ORDER BY PROPNAME ASC,SCORE ASC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            if r:
-                cursornum = await connection.execute(f"SELECT COUNT(EXCHANGEID) AS EXCHANGENUM FROM PROP_EXCHANGE WHERE NUM>0")
-                num = await cursornum.fetchall()
-                await connection.close()
-                return num[0][0],r
-            else:
-                await connection.close()
-                return 0,0
-        except:
-            raise Exception('查找表发生错误')
-    
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select exchangeid,proptype,propname,num,score from prop_exchange "
+            "where cast(num as bigint)>0 order by propname asc,score asc limit ? offset ?",
+            (num, startnum),
+        )
+        if not rows:
+            return 0, 0
+        count_row = await fetchone(
+            "select count(exchangeid) as exchangenum from prop_exchange where cast(num as bigint)>0"
+        )
+        total = int(count_row[0]) if count_row else 0
+        return total, rows
+
     async def get_exchange_list_my(self, uid, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT EXCHANGEID,PROPTYPE,PROPNAME,NUM,SCORE FROM PROP_EXCHANGE WHERE NUM>0 AND UID='{uid}' ORDER BY PROPNAME ASC,SCORE ASC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            if r:
-                cursornum = await connection.execute(f"SELECT COUNT(EXCHANGEID) AS EXCHANGENUM FROM PROP_EXCHANGE WHERE NUM>0 AND UID='{uid}'")
-                num = await cursornum.fetchall()
-                await connection.close()
-                return num[0][0],r
-            else:
-                await connection.close()
-                return 0,0
-        except:
-            raise Exception('查找表发生错误')
-    
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select exchangeid,proptype,propname,num,score from prop_exchange "
+            "where cast(num as bigint)>0 and uid=? order by propname asc,score asc limit ? offset ?",
+            (_text(uid), num, startnum),
+        )
+        if not rows:
+            return 0, 0
+        count_row = await fetchone(
+            "select count(exchangeid) as exchangenum from prop_exchange "
+            "where cast(num as bigint)>0 and uid=?",
+            (_text(uid),),
+        )
+        total = int(count_row[0]) if count_row else 0
+        return total, rows
+
     async def get_exchange_list_sx_type(self, proptype, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT EXCHANGEID,PROPTYPE,PROPNAME,NUM,SCORE FROM PROP_EXCHANGE WHERE NUM>0 AND PROPTYPE='{proptype}' ORDER BY PROPNAME ASC,SCORE ASC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            if r:
-                cursornum = await connection.execute(f"SELECT COUNT(EXCHANGEID) AS EXCHANGENUM FROM PROP_EXCHANGE WHERE NUM>0 AND PROPTYPE='{proptype}'")
-                num = await cursornum.fetchall()
-                await connection.close()
-                return num[0][0],r
-            else:
-                await connection.close()
-                return 0,0
-        except:
-            raise Exception('查找表发生错误')
-    
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select exchangeid,proptype,propname,num,score from prop_exchange "
+            "where cast(num as bigint)>0 and proptype=? "
+            "order by propname asc,score asc limit ? offset ?",
+            (_text(proptype), num, startnum),
+        )
+        if not rows:
+            return 0, 0
+        count_row = await fetchone(
+            "select count(exchangeid) as exchangenum from prop_exchange "
+            "where cast(num as bigint)>0 and proptype=?",
+            (_text(proptype),),
+        )
+        total = int(count_row[0]) if count_row else 0
+        return total, rows
+
     async def get_exchange_list_sx_name(self, proptype, propname, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT EXCHANGEID,PROPTYPE,PROPNAME,NUM,SCORE FROM PROP_EXCHANGE WHERE NUM>0 AND PROPTYPE='{proptype}' AND PROPNAME='{propname}' ORDER BY PROPNAME ASC,SCORE ASC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            if r:
-                cursornum = await connection.execute(f"SELECT COUNT(EXCHANGEID) AS EXCHANGENUM FROM PROP_EXCHANGE WHERE NUM>0 AND PROPTYPE='{proptype}' AND PROPNAME='{propname}'")
-                num = await cursornum.fetchall()
-                await connection.close()
-                return num[0][0],r
-            else:
-                await connection.close()
-                return 0,0
-        except:
-            raise Exception('查找表发生错误')
-    
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select exchangeid,proptype,propname,num,score from prop_exchange "
+            "where cast(num as bigint)>0 and proptype=? and propname=? "
+            "order by propname asc,score asc limit ? offset ?",
+            (_text(proptype), _text(propname), num, startnum),
+        )
+        if not rows:
+            return 0, 0
+        count_row = await fetchone(
+            "select count(exchangeid) as exchangenum from prop_exchange "
+            "where cast(num as bigint)>0 and proptype=? and propname=?",
+            (_text(proptype), _text(propname)),
+        )
+        total = int(count_row[0]) if count_row else 0
+        return total, rows
+
     async def get_exchange_list_time(self, findtime):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT EXCHANGEID,PROPTYPE,PROPNAME,NUM,UID FROM PROP_EXCHANGE WHERE UPTIME<{findtime}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def update_refresh_send(self,groupid,botid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO REFRESH_SEND (GROUPID,BOTID) VALUES (?,?)',
-                (groupid, botid),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        rows = await fetchall(
+            "select exchangeid,proptype,propname,num,uid from prop_exchange where uptime<?",
+            (_int(findtime),),
+        )
+        return rows if rows else 0
+
+    async def update_refresh_send(self, groupid, botid):
+        await execute(
+            "insert into refresh_send (groupid,botid) values (?,?) "
+            "on conflict (groupid) do update set botid=excluded.botid",
+            (_text(groupid), _text(botid)),
+        )
+
     async def get_refresh_send_list(self):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT GROUPID,BOTID FROM REFRESH_SEND")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
-    async def delete_refresh_send(self,groupid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM REFRESH_SEND WHERE GROUPID='{groupid}'")
-        await connection.commit()
-        await connection.close()
-    
-    async def update_map_refresh(self,diqu,didian,pokemon):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO MAP_REFRESH (DIQU,DIDIAN,POKEMON) VALUES (?,?,?)',
-                (diqu, didian, pokemon),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
-    async def get_map_refresh(self,diqu,didian):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT POKEMON FROM MAP_REFRESH WHERE DIQU='{diqu}' AND DIDIAN='{didian}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        rows = await fetchall("select groupid,botid from refresh_send")
+        return rows if rows else 0
+
+    async def delete_refresh_send(self, groupid):
+        await execute("delete from refresh_send where groupid=?", (_text(groupid),))
+
+    async def update_map_refresh(self, diqu, didian, pokemon):
+        await execute(
+            "insert into map_refresh (diqu,didian,pokemon) values (?,?,?) "
+            "on conflict (diqu) do update set didian=excluded.didian, pokemon=excluded.pokemon",
+            (_text(diqu), _text(didian), _text(pokemon)),
+        )
+
+    async def get_map_refresh(self, diqu, didian):
+        row = await fetchone(
+            "select pokemon from map_refresh where diqu=? and didian=?",
+            (_text(diqu), _text(didian)),
+        )
+        return row[0] if row else 0
+
     async def get_map_refresh_list(self):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT DIQU,DIDIAN,POKEMON FROM MAP_REFRESH")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        rows = await fetchall("select diqu,didian,pokemon from map_refresh")
+        return rows if rows else 0
+
     async def update_pokemon_star(self, uid, bianhao, startype=0):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_STAR (UID,BIANHAO,TYPE) VALUES (?,?,?)',
-                (uid, bianhao, startype),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_star (uid,bianhao,type) values (?,?,?) "
+            "on conflict (uid,bianhao) do update set type=excluded.type",
+            (_text(uid), _int(bianhao), _int(startype)),
+        )
 
     async def get_pokemon_star(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT TYPE FROM POKEMON_STAR WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select type from pokemon_star where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
+        return int(row[0]) if row else 0
 
     async def _delete_poke_star(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_STAR WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_star where uid=?", (_text(uid),))
+
     async def _change_poke_star(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_STAR SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_star set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _delete_poke_starrush_uid(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_STARRUSH WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_starrush where uid=?", (_text(uid),))
+
     async def _change_poke_starrush_uid(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_STARRUSH SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_starrush set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _delete_poke_star_bianhao(self, uid, bianhao):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_STAR WHERE UID='{uid}' AND BIANHAO={bianhao}")
-        await connection.commit()
-        await connection.close()
+        await execute(
+            "delete from pokemon_star where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
 
     async def get_pokemon_starrush(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM POKEMON_STARRUSH WHERE UID='{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                await self.new_pokemon_starrush(uid)
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select num from pokemon_starrush where uid=?",
+            (_text(uid),),
+        )
+        if row:
+            return int(row[0])
+        await self.new_pokemon_starrush(uid)
+        return 0
 
     async def update_pokemon_starrush(self, uid, num):
-        rushnum = await self.get_pokemon_starrush(uid) + num
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_STARRUSH (UID,NUM) VALUES (?,?)',
-                (uid, rushnum),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_starrush (uid,num) values (?,?) "
+            "on conflict (uid) do update set num=pokemon_starrush.num+excluded.num",
+            (_text(uid), _int(num)),
+        )
 
     async def new_pokemon_starrush(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_STARRUSH (UID,NUM) VALUES (?,?)',
-                (uid, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_starrush (uid,num) values (?,?) "
+            "on conflict (uid) do update set num=excluded.num",
+            (_text(uid), 0),
+        )
 
     async def get_pokemon_prop_list(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT PROP,NUM FROM POKEMON_PROP WHERE UID='{uid}' AND NUM>0 ORDER BY NUM")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        rows = await fetchall(
+            "select prop,num from pokemon_prop where uid=? and num>0 order by num",
+            (_text(uid),),
+        )
+        return rows if rows else 0
 
     async def _new_pokemon_prop(self, uid, propname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_PROP (UID,PROP,NUM) VALUES (?,?,?)',
-                (uid, propname, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_prop (uid,prop,num) values (?,?,?) "
+            "on conflict (uid,prop) do nothing",
+            (_text(uid), _text(propname), 0),
+        )
 
     async def _get_pokemon_prop(self, uid, propname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM POKEMON_PROP WHERE UID='{uid}' AND PROP='{propname}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                await self._new_pokemon_prop(uid, propname)
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select num from pokemon_prop where uid=? and prop=?",
+            (_text(uid), _text(propname)),
+        )
+        if row:
+            return int(row[0])
+        await self._new_pokemon_prop(uid, propname)
+        return 0
 
     async def _add_pokemon_prop(self, uid, propname, num):
-        now_num = await self._get_pokemon_prop(uid, propname) + int(num)
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_PROP (UID,PROP,NUM) VALUES (?,?,?)',
-                (uid, propname, now_num),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "insert into pokemon_prop (uid,prop,num) values (?,?,?) "
+            "on conflict (uid,prop) do update set num=pokemon_prop.num+excluded.num",
+            (_text(uid), _text(propname), _int(num)),
+        )
+
     async def delete_pokemon_prop(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_PROP WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_prop where uid=?", (_text(uid),))
+
     async def change_pokemon_prop(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_PROP SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_prop set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _add_pokemon_group(self, uid, pokemon_list):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_TEAM (UID,TEAM) VALUES (?,?)',
-                (uid, pokemon_list),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_team (uid,team) values (?,?) "
+            "on conflict (uid) do update set team=excluded.team",
+            (_text(uid), _text(pokemon_list)),
+        )
 
     async def get_pokemon_group(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT TEAM FROM POKEMON_TEAM WHERE UID='{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return ''
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone("select team from pokemon_team where uid=?", (_text(uid),))
+        return row[0] if row else ""
 
     async def delete_pokemon_group(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_TEAM WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_team where uid=?", (_text(uid),))
+
     async def change_pokemon_group(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_TEAM SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_team set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _add_pokemon_egg(self, uid, bianhao, use_num):
-        eggnum = int(await self.get_pokemon_egg(uid, bianhao)) + int(use_num)
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_EGG (UID,BIANHAO,NUM) VALUES (?,?,?)',
-                (uid, bianhao, eggnum),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_egg (uid,bianhao,num) values (?,?,?) "
+            "on conflict (uid,bianhao) do update set num=pokemon_egg.num+excluded.num",
+            (_text(uid), _int(bianhao), _int(use_num)),
+        )
 
     async def delete_pokemon_egg_bianhao(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_EGG SET NUM=0 WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_egg set num=? where uid=? and bianhao=?",
+            (0, _text(uid), _int(bianhao)),
+        )
+
     async def update_pokemon_egg_bianhao(self, uid, bianhao, egg_num):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_EGG SET NUM={egg_num} WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_egg set num=? where uid=? and bianhao=?",
+            (_int(egg_num), _text(uid), _int(bianhao)),
+        )
+
     async def get_pokemon_egg(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT NUM FROM POKEMON_EGG WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select num from pokemon_egg where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
+        return int(row[0]) if row else 0
 
     async def get_pokemon_egg_num(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT COUNT(BIANHAO) AS EGGNUM FROM POKEMON_EGG WHERE UID='{uid}' AND NUM>0")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select count(bianhao) as eggnum from pokemon_egg where uid=? and num>0",
+            (_text(uid),),
+        )
+        return int(row[0]) if row else 0
 
     async def get_pokemon_egg_list(self, uid, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT BIANHAO,NUM FROM POKEMON_EGG WHERE UID='{uid}' AND NUM>0 ORDER BY NUM desc,BIANHAO ASC LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select bianhao,num from pokemon_egg where uid=? and num>0 "
+            "order by num desc,bianhao asc limit ? offset ?",
+            (_text(uid), num, startnum),
+        )
+        return rows if rows else 0
 
     async def delete_pokemon_egg(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_EGG WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_egg where uid=?", (_text(uid),))
+
     async def change_pokemon_egg(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_EGG SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_egg set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _get_map_now(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT HUIZHANG,MAP_NAME,NICKNAME,PIPEI,AUTOFLAG,AUTOTIME FROM POKEMON_MAP WHERE UID='{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0]
-            else:
-                return [0, '', 0, 0]
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select huizhang,map_name,nickname,pipei,autoflag,autotime "
+            "from pokemon_map where uid=?",
+            (_text(uid),),
+        )
+        return row if row else [0, "", 0, 0]
 
     async def _get_map_info_nickname(self, nickname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT HUIZHANG,MAP_NAME,UID,PIPEI,AUTOFLAG,AUTOTIME FROM POKEMON_MAP WHERE NICKNAME='{nickname}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0]
-            else:
-                return [0, '', 0, 0]
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select huizhang,map_name,uid,pipei,autoflag,autotime "
+            "from pokemon_map where nickname=?",
+            (_text(nickname),),
+        )
+        return row if row else [0, "", 0, 0]
 
     async def _add_map_now(self, uid, map_name):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_MAP SET MAP_NAME='{map_name}' WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
+        await execute(
+            "update pokemon_map set map_name=? where uid=?",
+            (_text(map_name), _text(uid)),
+        )
 
     async def _new_map_info(self, uid, map_name, nickname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_MAP (UID,HUIZHANG,MAP_NAME,NICKNAME,PIPEI,AUTOFLAG,AUTOTIME) VALUES (?,?,?,?,?,?,?)',
-                (uid, 0, map_name, nickname, 0, 0, 0),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "insert into pokemon_map (uid,huizhang,map_name,nickname,pipei,autoflag,autotime) "
+            "values (?,?,?,?,?,?,?) on conflict (uid) do update set "
+            "huizhang=excluded.huizhang, map_name=excluded.map_name, "
+            "nickname=excluded.nickname, pipei=excluded.pipei, "
+            "autoflag=excluded.autoflag, autotime=excluded.autotime",
+            (_text(uid), 0, _text(map_name), _text(nickname), 0, 0, 0),
+        )
+
     async def get_map_pipei_num(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT PIPEI FROM POKEMON_MAP WHERE UID='{uid}'")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r[0][0]
-        else:
-            return 0
-    
+        row = await fetchone(
+            "select pipei from pokemon_map where uid=?",
+            (_text(uid),),
+        )
+        return int(row[0]) if row else 0
+
     async def get_map_pipei_list(self):
-        connection = await aiosqlite.connect(DB_PATH)
-        cursor = await connection.execute(f"SELECT UID,PIPEI FROM POKEMON_MAP WHERE PIPEI>0")
-        r = await cursor.fetchall()
-        await connection.close()
-        if r:
-            return r
-        else:
-            return 0
-    
+        rows = await fetchall("select uid,pipei from pokemon_map where pipei>0")
+        return rows if rows else 0
+
     async def update_map_pipei(self, uid, pipei_num):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET PIPEI = {pipei_num} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_map set pipei=? where uid=?",
+            (_int(pipei_num), _text(uid)),
+        )
+
     async def update_map_pipei_num(self, uid, pipei):
-        pipei_num = await self.get_map_pipei_num(uid) + pipei
-        pipei_num = max(0, pipei_num)
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET PIPEI = {pipei_num} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        expression = _clamp_zero("pipei+?")
+        await execute(
+            f"update pokemon_map set pipei={expression} where uid=?",
+            (_int(pipei), _text(uid)),
+        )
+
     async def update_map_autoinfo(self, uid, autoflag, autotime):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET AUTOFLAG = {autoflag}, AUTOTIME = {autotime} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_map set autoflag=?, autotime=? where uid=?",
+            (_int(autoflag), _int(autotime), _text(uid)),
+        )
+
     async def _update_map_name(self, uid, nickname):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET NICKNAME='{nickname}' WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_map set nickname=? where uid=?",
+            (_text(nickname), _text(uid)),
+        )
 
     async def _update_map_huizhang(self, uid, huizhang):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET HUIZHANG={huizhang} WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_map set huizhang=? where uid=?",
+            (_int(huizhang), _text(uid)),
+        )
 
     async def delete_pokemon_map(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_MAP  WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_map where uid=?", (_text(uid),))
+
     async def change_pokemon_map(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_MAP SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_map set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _add_huizhang_now(self, uid, huizhang):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_MAP SET HUIZHANG='{huizhang}' WHERE UID='{uid}'")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_map set huizhang=? where uid=?",
+            (_text(huizhang), _text(uid)),
+        )
 
     async def _add_pokemon_info(self, uid, bianhao, pokemon_info, exp=0):
         (
@@ -1174,211 +903,161 @@ class PokeCounter:
             nl_spd,
             xingge,
             jineng,
-            newexp,
+            _newexp,
             xiedai,
         ) = pokemon_info
-        # print(pokemon_info)
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                'INSERT OR REPLACE INTO POKEMON_TABLE (UID,BIANHAO,LEVEL,EXP,GT_HP,GT_ATK,GT_DEF,GT_STK,GT_SEF,GT_SPD,NL_HP,NL_ATK,NL_DEF,NL_STK,NL_SEF,NL_SPD,XINGGE,JINENG,XIEDAI) \
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (
-                    uid,
-                    bianhao,
-                    level,
-                    exp,
-                    gt_hp,
-                    gt_atk,
-                    gt_def,
-                    gt_stk,
-                    gt_sdf,
-                    gt_spd,
-                    nl_hp,
-                    nl_atk,
-                    nl_def,
-                    nl_stk,
-                    nl_sef,
-                    nl_spd,
-                    xingge,
-                    jineng,
-                    xiedai,
-                ),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "insert into pokemon_table "
+            "(uid,bianhao,level,exp,gt_hp,gt_atk,gt_def,gt_stk,gt_sef,gt_spd,"
+            "nl_hp,nl_atk,nl_def,nl_stk,nl_sef,nl_spd,xingge,jineng,xiedai) "
+            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "on conflict (uid,bianhao) do update set "
+            "level=excluded.level, exp=excluded.exp, gt_hp=excluded.gt_hp, "
+            "gt_atk=excluded.gt_atk, gt_def=excluded.gt_def, gt_stk=excluded.gt_stk, "
+            "gt_sef=excluded.gt_sef, gt_spd=excluded.gt_spd, nl_hp=excluded.nl_hp, "
+            "nl_atk=excluded.nl_atk, nl_def=excluded.nl_def, nl_stk=excluded.nl_stk, "
+            "nl_sef=excluded.nl_sef, nl_spd=excluded.nl_spd, xingge=excluded.xingge, "
+            "jineng=excluded.jineng, xiedai=excluded.xiedai",
+            (
+                _text(uid),
+                _int(bianhao),
+                _int(level),
+                _int(exp),
+                _int(gt_hp),
+                _int(gt_atk),
+                _int(gt_def),
+                _int(gt_stk),
+                _int(gt_sdf),
+                _int(gt_spd),
+                _int(nl_hp),
+                _int(nl_atk),
+                _int(nl_def),
+                _int(nl_stk),
+                _int(nl_sef),
+                _int(nl_spd),
+                _text(xingge),
+                _text(jineng),
+                _text(xiedai),
+            ),
+        )
 
     async def _add_pokemon_level(self, uid, bianhao, level, exp):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                f"UPDATE POKEMON_TABLE SET LEVEL=?, EXP=? WHERE UID='{uid}' AND BIANHAO=?",
-                (level, exp, bianhao),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_table set level=?, exp=? where uid=? and bianhao=?",
+            (_int(level), _int(exp), _text(uid), _int(bianhao)),
+        )
+
     async def _add_pokemon_nuli(
         self, uid, bianhao, nl_hp, nl_atk, nl_def, nl_stk, nl_sef, nl_spd
     ):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(
-                f"UPDATE POKEMON_TABLE SET NL_HP=?,NL_ATK=?,NL_DEF=?,NL_STK=?,NL_SEF=?,NL_SPD=? WHERE UID='{uid}' AND BIANHAO=?",
-                (nl_hp, nl_atk, nl_def, nl_stk, nl_sef, nl_spd, bianhao),
-            )
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_table set nl_hp=?,nl_atk=?,nl_def=?,nl_stk=?,nl_sef=?,nl_spd=? "
+            "where uid=? and bianhao=?",
+            (
+                _int(nl_hp),
+                _int(nl_atk),
+                _int(nl_def),
+                _int(nl_stk),
+                _int(nl_sef),
+                _int(nl_spd),
+                _text(uid),
+                _int(bianhao),
+            ),
+        )
 
     async def _add_pokemon_jineng(self, uid, bianhao, jineng):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_TABLE SET JINENG='{jineng}' WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_table set jineng=? where uid=? and bianhao=?",
+            (_text(jineng), _text(uid), _int(bianhao)),
+        )
+
     async def _add_pokemon_xiedai(self, uid, bianhao, xiedai):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_TABLE SET XIEDAI='{xiedai}' WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
-    
+        await execute(
+            "update pokemon_table set xiedai=? where uid=? and bianhao=?",
+            (_text(xiedai), _text(uid), _int(bianhao)),
+        )
+
     async def _add_pokemon_xingge(self, uid, bianhao, xingge):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_TABLE SET XINGGE='{xingge}' WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_table set xingge=? where uid=? and bianhao=?",
+            (_text(xingge), _text(uid), _int(bianhao)),
+        )
 
     async def _add_pokemon_id(self, uid, bianhao, changeid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            await connection.execute(f"UPDATE POKEMON_TABLE SET BIANHAO='{changeid}' WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            await connection.commit()
-            await connection.close()
-        except:
-            raise Exception('更新表发生错误')
+        await execute(
+            "update pokemon_table set bianhao=? where uid=? and bianhao=?",
+            (_int(changeid), _text(uid), _int(bianhao)),
+        )
 
     async def _get_pokemon_info(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT LEVEL,GT_HP,GT_ATK,GT_DEF,GT_STK,GT_SEF,GT_SPD,NL_HP,NL_ATK,NL_DEF,NL_STK,NL_SEF,NL_SPD,XINGGE,JINENG,EXP,XIEDAI FROM POKEMON_TABLE WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        row = await fetchone(
+            "select level,gt_hp,gt_atk,gt_def,gt_stk,gt_sef,gt_spd,"
+            "nl_hp,nl_atk,nl_def,nl_stk,nl_sef,nl_spd,xingge,jineng,exp,xiedai "
+            "from pokemon_table where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
+        return row if row else 0
+
     async def _get_pokemon_info_list(self, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT UID,(GT_HP+GT_ATK+GT_DEF+GT_SEF+GT_SPD+GT_STK) AS GT_Z FROM POKEMON_TABLE WHERE BIANHAO={bianhao} ORDER BY (GT_HP+GT_ATK+GT_DEF+GT_SEF+GT_SPD+GT_STK) DESC LIMIT 0,50")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        rows = await fetchall(
+            "select uid,(gt_hp+gt_atk+gt_def+gt_sef+gt_spd+gt_stk) as gt_z "
+            "from pokemon_table where bianhao=? "
+            "order by (gt_hp+gt_atk+gt_def+gt_sef+gt_spd+gt_stk) desc limit ? offset ?",
+            (_int(bianhao), 50, 0),
+        )
+        return rows if rows else 0
+
     async def _get_pokemon_info_list_pm(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT BIANHAO,(GT_HP+GT_ATK+GT_DEF+GT_SEF+GT_SPD+GT_STK) AS GT_Z FROM POKEMON_TABLE WHERE UID='{uid}' ORDER BY (GT_HP+GT_ATK+GT_DEF+GT_SEF+GT_SPD+GT_STK) DESC LIMIT 0,50")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
-    
+        rows = await fetchall(
+            "select bianhao,(gt_hp+gt_atk+gt_def+gt_sef+gt_spd+gt_stk) as gt_z "
+            "from pokemon_table where uid=? "
+            "order by (gt_hp+gt_atk+gt_def+gt_sef+gt_spd+gt_stk) desc limit ? offset ?",
+            (_text(uid), 50, 0),
+        )
+        return rows if rows else 0
+
     async def _get_pokemon_level(self, uid, bianhao):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT LEVEL,EXP FROM POKEMON_TABLE WHERE UID='{uid}' AND BIANHAO={bianhao}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select level,exp from pokemon_table where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )
+        return row if row else 0
 
     async def _get_pokemon_num(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT COUNT(BIANHAO) AS NUM FROM POKEMON_TABLE WHERE UID='{uid}'")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r[0][0]
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        row = await fetchone(
+            "select count(bianhao) as num from pokemon_table where uid=?",
+            (_text(uid),),
+        )
+        return int(row[0]) if row else 0
 
     async def _get_pokemon_list(self, uid, page=0):
         num = 30
-        startnum = num * page
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT BIANHAO,LEVEL FROM POKEMON_TABLE WHERE UID='{uid}' ORDER BY LEVEL desc,BIANHAO asc LIMIT {startnum},{num}")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        startnum = num * int(page)
+        rows = await fetchall(
+            "select bianhao,level from pokemon_table where uid=? "
+            "order by level desc,bianhao asc limit ? offset ?",
+            (_text(uid), num, startnum),
+        )
+        return rows if rows else 0
 
     async def _get_my_pokemon(self, uid):
-        try:
-            connection = await aiosqlite.connect(DB_PATH)
-            cursor = await connection.execute(f"SELECT BIANHAO FROM POKEMON_TABLE WHERE UID='{uid}' ORDER BY LEVEL desc")
-            r = await cursor.fetchall()
-            await connection.close()
-            if r:
-                return r
-            else:
-                return 0
-        except:
-            raise Exception('查找表发生错误')
+        rows = await fetchall(
+            "select bianhao from pokemon_table where uid=? order by level desc",
+            (_text(uid),),
+        )
+        return rows if rows else 0
 
     async def _delete_poke_info(self, uid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_TABLE WHERE UID='{uid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute("delete from pokemon_table where uid=?", (_text(uid),))
+
     async def _change_poke_info(self, newuid, olduid):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"UPDATE POKEMON_TABLE SET UID='{newuid}' WHERE UID='{olduid}'")
-        await connection.commit()
-        await connection.close()
-    
+        await execute(
+            "update pokemon_table set uid=? where uid=?",
+            (_text(newuid), _text(olduid)),
+        )
+
     async def _delete_poke_bianhao(self, uid, bianhao):
-        connection = await aiosqlite.connect(DB_PATH)
-        await connection.execute(f"DELETE FROM POKEMON_TABLE WHERE UID='{uid}' AND BIANHAO={bianhao}")
-        await connection.commit()
-        await connection.close()
+        await execute(
+            "delete from pokemon_table where uid=? and bianhao=?",
+            (_text(uid), _int(bianhao)),
+        )

@@ -6,9 +6,7 @@ import asyncio
 from collections import Counter
 from typing import Any, Dict, Iterable, List
 
-import aiosqlite
-
-from ..Pokemon.utils.dbbase.PokeCounter import DB_PATH
+from ..Pokemon.utils.dbbase.storage import fetchall, fetchone
 from .data import STAT_NAMES, display_name, type_effectiveness, type_matrix, types_of
 
 ALL_TYPES = list(type_matrix().keys())
@@ -90,20 +88,20 @@ def team_analysis(team_items: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 async def global_overview(top_species: int = 10) -> Dict[str, Any]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT COUNT(DISTINCT UID) FROM POKEMON_MAP WHERE HUIZHANG>0")
-        players = (await cursor.fetchone())[0]
-        cursor = await db.execute("SELECT COUNT(*), AVG(LEVEL), MAX(LEVEL) FROM POKEMON_TABLE")
-        count, avg_level, max_level = await cursor.fetchone()
-        cursor = await db.execute(
-            "SELECT BIANHAO, COUNT(*) AS NUM, AVG(LEVEL) AS AVGLEVEL FROM POKEMON_TABLE GROUP BY BIANHAO ORDER BY NUM DESC LIMIT ?",
-            (int(top_species),),
-        )
-        species_rows = await cursor.fetchall()
-        cursor = await db.execute("SELECT LEVEL, COUNT(*) FROM POKEMON_TABLE GROUP BY LEVEL ORDER BY LEVEL")
-        level_rows = await cursor.fetchall()
-        cursor = await db.execute("SELECT AVG(SCORE), SUM(SCORE), COUNT(*) FROM POKEMON_SCORE")
-        avg_score, total_score, score_users = await cursor.fetchone()
+    players_row = await fetchone("select count(distinct uid) from pokemon_map where cast(huizhang as bigint)>0")
+    players = players_row[0] if players_row else 0
+    count_row = await fetchone("select count(*), avg(level), max(level) from pokemon_table")
+    count, avg_level, max_level = count_row if count_row else (0, 0, 0)
+    species_rows = await fetchall(
+        "select bianhao, count(*) as num, avg(level) as avglevel from pokemon_table "
+        "group by bianhao order by num desc limit ?",
+        (int(top_species),),
+    )
+    level_rows = await fetchall(
+        "select level, count(*) from pokemon_table group by level order by level"
+    )
+    score_row = await fetchone("select avg(score), sum(score), count(*) from pokemon_score")
+    avg_score, total_score, score_users = score_row if score_row else (0, 0, 0)
 
     type_counter: Counter = Counter()
     for pid, num, _ in species_rows:

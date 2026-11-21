@@ -9,7 +9,7 @@ ToolSpec 暴露，模型由宿主 ``/qweb/chat`` 里用户选择的 New API 模�
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 
 class Config(BaseModel):
@@ -19,6 +19,13 @@ class Config(BaseModel):
     pokemon_enabled: bool = True
     pokemon_command_prefixes: list[str] = Field(default_factory=list)
     pokemon_data_dir: str = ""
+
+    # ---------------------------------------------------------------- 存储
+    # 默认 SQLite 独立兼容；七七生产显式 POKEMON_STORAGE=postgres。
+    # 测试/standalone 可显式 POKEMON_DATABASE_URL；生产留空时复用宿主
+    # src.qi_web.config.get_settings().database_url。DSN 不写日志。
+    pokemon_storage: str = "sqlite"
+    pokemon_database_url: SecretStr = SecretStr("")
 
     # ---------------------------------------------------------------- 资源
     pokemon_resource_base_url: str = "https://silverwing.elysia.beauty/Pokemon"

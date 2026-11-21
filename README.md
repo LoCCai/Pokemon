@@ -80,6 +80,8 @@ PicMenu Next 与 MoEllmChats 保持独立安装，未安装时插件仍可正常
 | `POKEMON_ENABLED` | `true` | 总开关 |
 | `POKEMON_COMMAND_PREFIXES` | `[]` | 额外命令前缀（NoneBot `COMMAND_START` 已自动处理） |
 | `POKEMON_DATA_DIR` | 空 | 数据目录；空则用 localstore / `data/pokemon` |
+| `POKEMON_STORAGE` | `sqlite` | `sqlite` 保持旧库独立兼容；`postgres` 启用七七 PG 后端 |
+| `POKEMON_DATABASE_URL` | 空 | 测试/standalone 的显式 PG DSN；生产留空则复用宿主 settings |
 | `POKEMON_RESOURCE_BASE_URL` | `https://silverwing.elysia.beauty/Pokemon` | 图标素材镜像 |
 | `POKEMON_RESOURCE_AUTO_DOWNLOAD` | `true` | 缺图时后台懒下载 |
 | `POKEMON_RESOURCE_DOWNLOAD_CONCURRENCY` | `8` | 素材下载并发 |
@@ -93,6 +95,38 @@ PicMenu Next 与 MoEllmChats 保持独立安装，未安装时插件仍可正常
 > 之类的客户端身份头，也没有游客回退。网页默认关闭；开启时必须由宿主
 > `src.qi_web.dependencies` 提供 `require_membership`、`admin_account`、
 > `csrf_protected`。离线测试可显式注入依赖。
+
+### PostgreSQL 后端（七七分支）
+
+默认仍是 SQLite，旧 `pokemon.db` 与单机流程不变。只有显式设置
+`POKEMON_STORAGE=postgres` 才启用 PostgreSQL；该开关也会读取 NoneBot 的
+同名 `Config` 字段，避免 `.env.prod` 未进入 `os.environ` 时失效。
+
+DSN 解析顺序：
+
+1. 显式 `POKEMON_DATABASE_URL`（环境变量或 NoneBot 配置，测试/standalone 用）；
+2. 生产宿主的 `src.qi_web.config.get_settings().database_url`，兼容 `SecretStr`
+   与 SQLAlchemy 风格 URL，并转换为 psycopg 可接受的 DSN。
+
+DSN 不会写入日志、异常文本、网页响应或管理状态。
+
+PG 使用独立 schema `qiqi_pokemon`，表名/列名均为小写且不加引号，逻辑列与旧
+SQLite 一一对应；整数列使用 `BIGINT`，`prop_exchange.num` 保留旧库的 `TEXT`
+语义但在 SQL 中显式 `CAST`。仓库中的 `nonebot_plugin_pokemon/migrations/001_postgresql.sql`
+是可选的建表参考；**运行时不会执行任何 DDL，也不会自动改表**。启动时会只读
+检查表/列是否存在，缺失只记录警告。
+
+运行路径：
+
+- 异步行星/网页统计走 `psycopg_pool.AsyncConnectionPool`；
+- 旧的同步每日限次 `RecordDAO` 走独立 `psycopg_pool.ConnectionPool`；
+- 每次连接通过上下文归还，写操作显式 `commit`，异常 `rollback`；
+- 积分、道具、蛋、学习机、游戏计数、重生次数、匹配点数、交易所数量等
+  read-modify-write 改为单条原子 `INSERT ... ON CONFLICT ... DO UPDATE`
+  或原子 `UPDATE`，SQLite 与 PG 共用同一套参数化静态 SQL。
+
+依赖：`psycopg[binary,pool]>=3.2,<4` 已加入安装依赖。SQLite 模式不建立 PG
+连接；PG 模式未安装该依赖或缺少表时会在启动日志中给出明确提示。
 
 ## 使用
 

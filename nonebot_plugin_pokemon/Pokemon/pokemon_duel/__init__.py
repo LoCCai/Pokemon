@@ -328,38 +328,45 @@ async def get_chushi_pokemon(bot, ev: Event):
             f'{POKEMON_LIST[bianhao][0]}不属于初始精灵，无法领取。',
             at_sender=True,
         )
-    startype = await get_pokemon_star(uid)
-    pokemon_info = await add_pokemon(uid, bianhao, startype)
-    await POKE._add_pokemon_group(uid, bianhao)
+    from ..utils.dbbase.storage import starter_transaction
 
-    await POKE.update_pokemon_star(uid, bianhao, startype)
-    if bianhao in [1,4,7]:
-        go_didian = '1号道路'
-    elif bianhao in [152,155,158]:
-        go_didian = '29号道路'
-    elif bianhao in [252,255,258]:
-        go_didian = '101号道路'
-    elif bianhao in [387,390,393]:
-        go_didian = '201号道路'
-    elif bianhao in [495,498,501]:
-        go_didian = '合众19号道路'
-    elif bianhao in [650,653,656]:
-        go_didian = '卡洛斯2号道路'
-    elif bianhao in [722,725,728]:
-        go_didian = '阿罗拉1号道路'
-    elif bianhao in [810,813,816]:
-        go_didian = '伽勒尔1号道路'
-    elif bianhao in [906,909,912]:
-        go_didian = '南1区'
-    else:
-        csdidianlist = ['1号道路', '29号道路', '101号道路', '201号道路','合众19号道路','卡洛斯2号道路','阿罗拉1号道路','伽勒尔1号道路','南1区']
-        go_didian = random.sample(csdidianlist, 1)[0]
-    name = uid
-    if ev.sender:
-        sender = ev.sender
-        if sender.get('nickname', '') != '':
-            name = sender['nickname']
-    await POKE._new_map_info(uid, go_didian, name)
+    async with starter_transaction(uid):
+        already_owned = await POKE._get_pokemon_num(uid) > 0
+        if not already_owned:
+            startype = await get_pokemon_star(uid)
+            pokemon_info = await add_pokemon(uid, bianhao, startype)
+            await POKE._add_pokemon_group(uid, bianhao)
+
+            await POKE.update_pokemon_star(uid, bianhao, startype)
+            if bianhao in [1,4,7]:
+                go_didian = '1号道路'
+            elif bianhao in [152,155,158]:
+                go_didian = '29号道路'
+            elif bianhao in [252,255,258]:
+                go_didian = '101号道路'
+            elif bianhao in [387,390,393]:
+                go_didian = '201号道路'
+            elif bianhao in [495,498,501]:
+                go_didian = '合众19号道路'
+            elif bianhao in [650,653,656]:
+                go_didian = '卡洛斯2号道路'
+            elif bianhao in [722,725,728]:
+                go_didian = '阿罗拉1号道路'
+            elif bianhao in [810,813,816]:
+                go_didian = '伽勒尔1号道路'
+            elif bianhao in [906,909,912]:
+                go_didian = '南1区'
+            else:
+                csdidianlist = ['1号道路', '29号道路', '101号道路', '201号道路','合众19号道路','卡洛斯2号道路','阿罗拉1号道路','伽勒尔1号道路','南1区']
+                go_didian = random.sample(csdidianlist, 1)[0]
+            name = uid
+            if ev.sender:
+                sender = ev.sender
+                if sender.get('nickname', '') != '':
+                    name = sender['nickname']
+            await POKE._new_map_info(uid, go_didian, name)
+    if already_owned:
+        return await bot.send('您已经有精灵了，无法领取初始精灵。', at_sender=True)
 
     HP, W_atk, W_def, M_atk, M_def, speed = await get_pokemon_shuxing(
         bianhao, pokemon_info
