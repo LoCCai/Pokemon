@@ -261,17 +261,15 @@ async def _global_overview(*, _ctx: ToolContextData) -> ToolOutcome:
 
 
 async def _leaderboard(*, kind: str = "score", _ctx: ToolContextData) -> ToolOutcome:
-    from ..game import repository
+    from ..game.rankings import player_board
 
-    if kind == "dungeon":
-        data = await repository.dungeon_leaderboard()
-        lines = [f"{i+1}. {item['uid']} 第 {item['floor']} 层" for i, item in enumerate(data)]
-    elif kind == "pokedex":
-        data = await repository.pokedex_leaderboard()
-        lines = [f"{i+1}. {item['uid']} 收集 {item['unique_pokemon']} 种" for i, item in enumerate(data)]
-    else:
-        data = await repository.score_leaderboard()
-        lines = [f"{i+1}. {item['nickname']} 金币 {item['score']}" for i, item in enumerate(data)]
+    data = await player_board(kind, _ctx.user_id, _ctx.group_id, admin=_ctx.is_admin)
+    key, unit = {"dungeon": ("floor", "层"), "pokedex": ("unique_pokemon", "种")}.get(kind, ("score", "金币"))
+    lines = []
+    for i, item in enumerate(data, 1):
+        groups = " · ".join(item["groups"])
+        name = item["nickname"] + (f"（{groups}）" if groups else "")
+        lines.append(f"{i}. {name}　{item[key]} {unit}")
     return ToolOutcome(text="排行榜：\n" + ("\n".join(lines) or "暂无数据"), structured={"items": data})
 
 
@@ -305,6 +303,26 @@ async def _command(*, command: str, _ctx: ToolContextData) -> ToolOutcome:
 
     if missing := _identity_required(_ctx, "执行游戏指令"):
         return missing
+    if not _ctx.group_id and _ctx.platform in {"web", "qweb"}:
+        from ..game.minigames import canonical_game
+        from ..platform.ingress import clean_text
+        from ..web.session import registry
+
+        game = canonical_game(clean_text(command))
+        if game:
+            session = registry.get(_ctx.user_id, None, _ctx.user_name, _ctx.is_admin, _ctx.role)
+            current = registry.status(session, "", 0)
+            if current["done"]:
+                current = await registry.act(session, "minigame_start", game,
+                                             current["operation"], current["offset"])
+            if current.get("stale"):
+                current = registry.status(session, "", 0)
+            quiz = current.get("minigame") or {}
+            return ToolOutcome(
+                text=current.get("error") or (quiz.get("prompt") or "已有进行中的游戏行动。"),
+                images=current.get("images", [])[:1],
+                structured={"game": quiz.get("game"), "continue_url": "/qweb/pokemon", "awaiting": current["awaiting"]},
+            )
     result = await run_command(
         command,
         user_id=_ctx.user_id,

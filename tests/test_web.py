@@ -87,7 +87,12 @@ def test_index_page(client, headers):
     assert "X-Pokemon-User" not in r.text
     assert "X-QWeb-Is-Admin" not in r.text
     assert 'id="screen"' in r.text and 'id="command-input"' not in r.text
-    assert '<script src="/qweb/pokemon/static/app.js"></script>' in r.text
+    from urllib.parse import urlsplit
+    import re
+
+    scripts = re.findall(r'<script src="([^"]+)"', r.text)
+    assert "/qweb/pokemon/static/app.js" in [urlsplit(url).path for url in scripts]
+    assert all(url.startswith("/qweb/pokemon/static/") for url in scripts)
     assert "<script>" not in r.text
     script = client.get("/qweb/pokemon/static/app.js", headers=headers)
     assert script.status_code == 200

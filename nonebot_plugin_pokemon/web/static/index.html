@@ -3,15 +3,17 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>宝可梦 · QWeb</title>
 <script src="__POKEMON_BASE__/static/qweb-theme.js"></script>
-<link rel="stylesheet" href="__POKEMON_BASE__/static/game.css">
+<link rel="stylesheet" href="/qweb/assets/qweb-image-halo.css">
+<link rel="stylesheet" href="__POKEMON_BASE__/static/game.css?v=player-games-2">
 </head><body>
 <main class="game-shell">
   <header class="top"><h1><i class="ball" aria-hidden="true"></i>宝可梦冒险</h1><div id="trainer"></div></header>
   <nav id="tabs" aria-label="游戏功能"></nav>
+  <aside id="ongoing" aria-label="进行中的游戏"></aside>
   <div id="notice" role="status" aria-live="polite"></div>
   <section id="screen" aria-live="off"><p class="empty">正在读取冒险存档…</p></section>
 </main>
 <dialog id="dialog"><header><h2 id="dialog-title"></h2><button id="close" class="icon" title="关闭" aria-label="关闭">×</button></header><div id="detail"></div></dialog>
 <script src="__POKEMON_BASE__/static/game.js"></script>
-<script src="__POKEMON_BASE__/static/app.js"></script>
+<script src="__POKEMON_BASE__/static/app.js?v=player-games-2"></script>
 </body></html>

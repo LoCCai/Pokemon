@@ -17,18 +17,35 @@ from ..Pokemon.pokemon_duel.pmconfig import chushi_list
 from ..Pokemon.pokemon_duel.prop import proplist
 from ..Pokemon.utils.dbbase.storage import fetchall
 from .data import display_name, resolve_pokemon
+from .minigames import canonical_game, normalize_guess
 
 ALLOWED_ACTIONS = (
     "claim",
     "choose_region",
     "travel",
     "explore",
+    "start_auto",
+    "end_auto",
     "fish",
     "challenge",
     "party",
     "equip",
     "reply",
     "cancel",
+    "minigame_start",
+    "minigame_guess",
+    "minigame_hint",
+    "minigame_reset",
+)
+
+# Actions handled by the web session registry against the real native
+# interaction.  They are typed here so a client can never submit an arbitrary
+# command or game name.
+MINIGAME_ACTIONS = (
+    "minigame_start",
+    "minigame_guess",
+    "minigame_hint",
+    "minigame_reset",
 )
 
 # Starter families are the real pmconfig.chushi_list entries; region keys come
@@ -239,6 +256,10 @@ def resolve_action(
         destination = normalize_destination(value)
         return {"action": action, "value": destination, "command": f"前往 {destination}"}
 
+    if action in {"start_auto", "end_auto"}:
+        command = "开启自动探索" if action == "start_auto" else "结束自动探索"
+        return {"action": action, "value": None, "command": command}
+
     if action == "explore":
         return {"action": action, "value": None, "command": "野外探索"}
 
@@ -270,6 +291,46 @@ def resolve_action(
             raise ActionError("请选择要编入队伍的宝可梦。")
         names = [display_name(pid) for pid in ids]
         return {"action": action, "value": names, "ids": ids, "command": f"更新队伍 {' '.join(names)}"}
+
+    if action == "minigame_start":
+        game = canonical_game(value)
+        if not game:
+            raise ActionError("请选择小游戏：我是谁/猜图鉴/猜技能/猜属性/猜精灵。")
+        return {
+            "action": action,
+            "value": game,
+            "game": game,
+            "minigame": True,
+            "command": game,
+        }
+
+    if action == "minigame_guess":
+        try:
+            text = normalize_guess(value)
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+        return {
+            "action": action,
+            "value": text,
+            "minigame": True,
+            "command": None,
+        }
+
+    if action == "minigame_hint":
+        return {
+            "action": action,
+            "value": None,
+            "minigame": True,
+            "command": None,
+        }
+
+    if action == "minigame_reset":
+        return {
+            "action": action,
+            "value": None,
+            "minigame": True,
+            "command": "重置小游戏",
+        }
 
     if action == "equip":
         pokemon_raw, item_raw = _equip_pair(value)
@@ -306,6 +367,7 @@ def starter_regions() -> Dict[int, str]:
 
 __all__ = [
     "ALLOWED_ACTIONS",
+    "MINIGAME_ACTIONS",
     "ActionError",
     "normalize_destination",
     "normalize_item",

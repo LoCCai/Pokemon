@@ -5,7 +5,7 @@
   const screen = $('#screen'), detail = $('#detail'), dialog = $('#dialog');
   const store = {world:null, tab:'冒险', starter:0, group:0, busy:false, snapshot:null, text:'', images:[], page:0, view:0};
   const positions = [[.28,.67],[.52,.51],[.70,.30],[.75,.72]];
-  const tabs = ['冒险','队伍','背包','图鉴','排行','活动'];
+  const tabs = ['冒险','队伍','背包','图鉴','排行','小游戏','活动'];
   const h = (tag, cls, text) => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -52,10 +52,21 @@
     return box('panel',box('section-heading',h('h2','',title)),...nodes);
   }
   function image(src,alt,cls='') {
-    const el = h('img',cls);
+    const frame = h('span', 'qweb-media '+cls);
+    const el = h('img');
     el.alt = alt;
-    el.src = src;
-    return el;
+    el.decoding = 'async';
+    el.dataset.imageState = src ? 'loading' : 'failed';
+    el.onload = () => { el.dataset.imageState='loaded'; };
+    el.onerror = () => { el.dataset.imageState='failed'; };
+    const halo = h('span','qweb-halo');
+    halo.append(h('i'),h('i'),h('i'));
+    const indicator = h('span','media-indicator');
+    indicator.setAttribute('aria-hidden','true');
+    indicator.append(halo,h('span','media-missing',alt.trim()[0] || '◇'));
+    frame.append(el,indicator);
+    if(src)el.src=src;
+    return frame;
   }
   function sprite(mon,cls='sprite') {
     return image(BASE+'/api/game/sprite/'+encodeURIComponent(mon.id),mon.name,cls);
@@ -89,7 +100,7 @@
     store.world = world;
     const p = world.profile;
     $('#trainer').replaceChildren(h('b','',p.pokemon_count ? p.nickname : '新训练家'), h('span','','金币 '+p.score), h('span','','精灵 '+p.pokemon_count));
-    nav();
+    nav(); ongoing();
   }
   let pollTimer, epoch=0;
   function applySnapshot(s, reset=false) {
@@ -98,6 +109,21 @@
     if (s.text) store.text=(store.text+'\n'+s.text).trim().slice(-4500);
     if (s.images?.length) store.images=[...store.images,...s.images].slice(-4);
     if (s.error) notify(s.error);
+    ongoing();
+  }
+  function ongoing(){
+    const bar=$('#ongoing'), s=store.snapshot;
+    const controls=[];
+    if(s?.operation && !s.done){
+      const label=currentQuiz()?'退出猜题':s.battle?'退出战斗':'结束本次行动';
+      const page=currentQuiz()?'小游戏':'冒险';
+      if(store.tab!==page)controls.push(button(currentQuiz()?'返回题目':'返回冒险',()=>go(page)));
+      controls.push(actionButton(label,'cancel'));
+    }
+    if(store.world?.profile.auto_explore){
+      controls.push(actionButton('结束自动探索','end_auto',null,'end-auto'));
+    }
+    bar.replaceChildren(...controls);
   }
   function schedule(s) {
     clearTimeout(pollTimer);
@@ -112,7 +138,7 @@
         const changed = next.offset!==s.offset || next.done!==s.done || next.awaiting!==s.awaiting;
         applySnapshot(next);
         if (next.done) await refreshWorld();
-        if (changed && store.tab==='冒险') adventure();
+        if (changed) renderTurn();
         schedule(next);
       } catch(e) { if (stamp===epoch) { notify(e.message); pollTimer=setTimeout(poll,5000); } }
     };
@@ -120,13 +146,14 @@
   }
   async function restore() {
     const saved=await api('/api/session');
-    applySnapshot(saved,true); await refreshWorld(); await go(store.tab); schedule(saved);
+    applySnapshot(saved,true); if(!saved.done && currentQuiz())store.tab='小游戏';
+    await refreshWorld(); await go(store.tab); schedule(saved);
   }
-  async function perform(task,reset) {
+  async function perform(task,reset,tab='冒险') {
     if (store.busy) return;
     store.busy=true; epoch++; clearTimeout(pollTimer); notify('');
     if (dialog.open) dialog.close();
-    store.tab='冒险';nav();adventure();
+    store.tab=tab;nav();ongoing();renderTurn();
     try {
       const result=await task();
       applySnapshot(result,reset);
@@ -134,11 +161,12 @@
       if (result.done && !result.text && !result.images?.length && !result.error && !store.text) notify('本次行动已结束');
     } catch(e) {
       await restore(); notify(e.status===409?'行动状态已更新，请按当前回合选择。':e.message);
-    } finally { store.busy=false; if(store.tab==='冒险') adventure(); if(store.snapshot) schedule(store.snapshot); }
+    } finally { store.busy=false; ongoing(); renderTurn(); if(store.snapshot) schedule(store.snapshot); }
   }
   function act(action,value) {
     const prev=store.snapshot;
-    return perform(() => api('/api/game/action',{action,value,operation:prev?.operation || '',offset:prev?.offset || 0}), action!=='reply');
+    if(action==='minigame_start' || action==='cancel')store.quizDraft='';
+    return perform(() => api('/api/game/action',{action,value,operation:prev?.operation || '',offset:prev?.offset || 0}), action!=='reply', action==='minigame_start' || (['reply','cancel'].includes(action) && currentQuiz())?'小游戏':'冒险');
   }
   function legacy(command) {
     if (store.snapshot && !store.snapshot.done) return notify('请先结束当前行动');
@@ -186,8 +214,8 @@
     const controls=box('scenebar',button('地区地图',atlas));
     if(pages>1)controls.append(button('其他地点 ›',()=>{store.page=(store.page+1)%pages;adventure();}));
     const wild=current?.type==='野外';
-    if(wild)controls.prepend(actionButton('野外探索','explore',undefined,'primary'),actionButton('垂钓','fish'));
-    else if(dest.some(l=>l.type==='野外')){
+    if(wild && !p.auto_explore)controls.prepend(actionButton('野外探索','explore',undefined,'primary'),actionButton('自动探索','start_auto'),actionButton('垂钓','fish'));
+    else if(!p.auto_explore && dest.some(l=>l.type==='野外')){
       const field=dest.find(l=>l.type==='野外');
       controls.prepend(actionButton('前往'+field.name,'travel',field.name,'primary'));
     }
@@ -218,6 +246,7 @@
   }
   function resultPanel() {
     const s=store.snapshot;
+    if(currentQuiz())return null;
     if (!s?.operation && !store.busy) return null;
     const choices=box('actions');
     if(s?.awaiting){
@@ -232,7 +261,7 @@
         choices.append(answer,button('提交选择',()=>answer.value.trim() && act('reply',answer.value.trim())));
       }
     }
-    if(s?.operation && !s.done)choices.append(actionButton('结束本次行动','cancel'));
+    if(s?.canceled || s?.last_action?.action==='cancel')return null;
     const content=box('stack',choices);
     if(store.text){
       const log=h('details');log.append(h('summary','','行动记录'),h('p','result-text',store.text));
@@ -343,12 +372,85 @@
       const key=sel.value;
       const {items}=await api('/api/leaderboard/'+key);
       if(store.view!==version || key!==sel.value)return;
-      list.replaceChildren(...items.map((v,i)=>box('rank-row',h('span','',(i+1)+'.　'+(v.nickname || v.uid)),h('b','',v.score ?? v.unique_pokemon ?? v.floor))));
+      list.replaceChildren(...items.map((v,i)=>{
+        const groups=v.groups || [];
+        const who=box('rank-person',h('b','',v.nickname || '训练家'));
+        if(groups.length>2){
+          const more=h('details','rank-groups');
+          more.append(h('summary','',groups[0]+' 等 '+groups.length+' 个群'),h('small','',groups.join(' · ')));
+          who.append(more);
+        }else who.append(h('small','',groups.join(' · ') || '暂无共同群信息'));
+        return box('rank-row player-rank',h('small','place',String(i+1)),
+          image(v.avatar_url || '',v.nickname || '训练家','rank-avatar'),who,
+          h('strong','',v.score ?? v.unique_pokemon ?? v.floor));
+      }));
       if(!items.length)list.append(h('p','empty','暂无排行'));
     }
     sel.onchange=()=>update().catch(e=>notify(e.message));await update();
   }
+  const quizNames=['我是谁','猜图鉴','猜技能','猜属性','猜精灵'];
+  const quizHints=['看剪影认宝可梦','读图鉴辨物种','根据线索猜招式','推断属性组合','根据线索认精灵'];
+  function currentQuiz(){
+    const s=store.snapshot;
+    return s?.minigame?.game || null;
+  }
+  function renderTurn(){
+    if(store.tab==='冒险')adventure();
+    else if(store.tab==='小游戏')quizzes();
+  }
+  function quizzes(){
+    const s=store.snapshot, name=currentQuiz();
+    if(!name || s?.canceled || s?.last_action?.action==='cancel'){
+      const games=quizNames.map((n,i)=>{
+        const b=actionButton(n,'minigame_start',n,'game-tile');
+        b.append(h('small','',quizHints[i]));return b;
+      });
+      screen.replaceChildren(section('小游戏',box('quiz-grid',...games)));return;
+    }
+    const focused=document.activeElement?.id==='quiz-answer';
+    const content=box('quiz-content');
+    for(const src of store.images){
+      const zoom=button('',()=>preview(src,name),'quiz-art');
+      zoom.append(image(src,name));content.append(zoom);
+    }
+    const prompt=store.text.split('\n').filter(t=>!/^请在[\d.]+秒内做出选择/.test(t)).join('\n').trim();
+    if(prompt)content.append(h('p','quiz-prompt',prompt));
+    if(s.awaiting && s.last_action?.action==='reply')content.append(h('small','','上次作答 · '+s.last_action.value));
+    if(s.done){
+      content.append(box('actions',actionButton('再来一局','minigame_start',name,'primary'),
+        button('选择游戏',()=>{store.snapshot={...s,last_action:{},minigame:null};quizzes();})));
+    }else if(s.awaiting){
+      const form=h('form','quiz-answer');
+      const input=h('input');input.id='quiz-answer';input.maxLength=100;
+      input.setAttribute('aria-label','答案');input.placeholder=name==='猜属性'?'输入两种属性':'输入答案';
+      input.value=store.quizDraft || '';input.oninput=()=>{store.quizDraft=input.value;};
+      const send=h('button','primary','猜一下');send.type='submit';send.disabled=store.busy;
+      form.onsubmit=e=>{e.preventDefault();const guess=input.value.trim();if(guess && !store.busy){
+        store.quizDraft='';act('reply',guess);
+      }};
+      if(name==='猜属性'){
+        const picked=new Set((store.quizDraft || '').split(' ').filter(Boolean));
+        const types=box('type-picks');
+        for(const type of s.minigame.types){
+          const choice=button(type,()=>{
+            if(picked.has(type))picked.delete(type);
+            else if(picked.size<2)picked.add(type);
+            store.quizDraft=[...picked].join(' ');input.value=store.quizDraft;
+            for(const b of types.children)b.setAttribute('aria-pressed',String(picked.has(b.textContent)));
+            send.disabled=store.busy || picked.size!==2;
+          });
+          choice.setAttribute('aria-pressed',String(picked.has(type)));types.append(choice);
+        }
+        input.readOnly=true;send.disabled=store.busy || picked.size!==2;
+        content.append(types);
+      }
+      form.append(input,send);content.append(form);
+    }else content.append(h('small','',store.busy?'正在提交…':'正在出题…'));
+    screen.replaceChildren(section(name,content));
+    if(focused)$('#quiz-answer')?.focus({preventScroll:true});
+  }
   function activity(item) {
+    if(quizNames.includes(item.func))return act('minigame_start',item.func);
     const trigger=item.triggers.find(t=>t.type==='fullmatch') || item.triggers[0];
     if(!trigger)return;
     const input=h('input');input.setAttribute('aria-label','活动参数');
@@ -363,6 +465,7 @@
     if(version!==store.view)return;
     const body=box('stack');
     for(const [category,items] of Object.entries(menu.categories)){
+      if(category==='小游戏')continue;
       const available=items.filter(item=>!item.pmn_hidden && item.triggers?.length);
       if(available.length)body.append(section(category,box('actions',...available.map(item=>button(item.func,()=>activity(item))))));
     }
@@ -377,8 +480,8 @@
         button('重载菜单',async()=>{await api('/api/admin/reload',{});notify('菜单已重载');}))));
   }
   async function go(tab) {
-    store.tab=tab;const version=++store.view;nav();
-    const pages={'冒险':adventure,'队伍':team,'背包':bag,'图鉴':dex,'排行':rankings,'活动':activities,'管理':admin};
+    store.tab=tab;const version=++store.view;nav();ongoing();
+    const pages={'冒险':adventure,'队伍':team,'背包':bag,'图鉴':dex,'排行':rankings,'小游戏':quizzes,'活动':activities,'管理':admin};
     try { await pages[tab](version); } catch(e){ if(version===store.view)screen.replaceChildren(section(tab,h('p','empty',e.message),button('重试',()=>go(tab)))); }
   }
   async function start() {

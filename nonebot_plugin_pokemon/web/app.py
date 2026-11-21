@@ -264,12 +264,9 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
         kind: str,
         _ctx: ToolContextData = Depends(member_context),
     ) -> Dict[str, Any]:
-        if kind == "dungeon":
-            items = await repository.dungeon_leaderboard()
-        elif kind == "pokedex":
-            items = await repository.pokedex_leaderboard()
-        else:
-            items = await repository.score_leaderboard()
+        from ..game.rankings import player_board
+
+        items = await player_board(kind, _ctx.user_id, _ctx.group_id, admin=_ctx.is_admin)
         return {"kind": kind, "items": items}
 
     @router.get("/api/charts/{kind}")

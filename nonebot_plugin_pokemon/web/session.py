@@ -28,6 +28,15 @@ from ..platform.message import OutMessage
 from ..platform.projection import accepted_reply_values, build_state, extract_options
 from ..platform.transport import WebTransport
 from ..game.actions import ALLOWED_ACTIONS, ActionError, owned_ids, resolve_action
+from ..game.minigames import (
+    HINT_GAMES,
+    build_view,
+    canonical_game,
+    normalize_guess,
+    reset_scope,
+    scope_for,
+)
+from ..platform.ingress import clean_text
 from ..game.runner import _buttons, _messages, _permission_ok, make_web_event
 
 
@@ -45,6 +54,10 @@ class _Session:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     operation: str = ""
     turn: int = 0
+    # Canonical native minigame command and its per-account private state key.
+    # The key is derived from the trusted user id, never from a request field.
+    minigame: str = ""
+    minigame_scope: str = ""
     last_action: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -130,24 +143,53 @@ class WebSessionRegistry:
             if action not in ALLOWED_ACTIONS:
                 raise ActionError("不支持的游戏操作。")
 
+            waiting = bool(
+                session.event is not None
+                and broker.has_waiter(session.event.scene_key)
+            )
+
+            if action == "minigame_reset":
+                await self._cancel_locked(session)
+                self._start(session, "重置小游戏")
+                await self._short_wait(session)
+                return self._snapshot(session)
+
             if action == "cancel":
                 await self._cancel_locked(session)
+                session.transport = WebTransport(user_id=session.user_id, user_name=session.user_name, is_admin=session.is_admin)
+                session.error = ""
                 self._advance(session, "cancel", None)
                 return self._snapshot(session, canceled=True)
 
-            if action == "reply":
-                if not (session.event is not None and broker.has_waiter(session.event.scene_key)):
+            if action == "minigame_hint":
+                if not waiting or not session.minigame:
+                    raise ActionError("当前没有进行中的小游戏。", status_code=409)
+                if session.minigame not in HINT_GAMES:
+                    raise ActionError("该小游戏没有提示。", status_code=409)
+                # The native handler publishes its own timed ``提示N：`` prompts.
+                # This action only advances the snapshot token and returns the
+                # hints already produced by the real handler; it never invents
+                # or reorders a hint.
+                return self._snapshot(session, offset=len(session.transport.outbox))
+
+            if action in {"reply", "minigame_guess"}:
+                if not waiting:
                     raise ActionError("当前没有等待回复的交互。", status_code=409)
-                canonical = self._legal_reply(session, value)
-                self._advance(session, "reply", canonical)
+                if action == "minigame_guess" and not session.minigame:
+                    raise ActionError("当前没有进行中的小游戏。", status_code=409)
+                if session.minigame:
+                    try:
+                        canonical = normalize_guess(value, session.minigame)
+                    except ValueError as exc:
+                        raise ActionError(str(exc)) from exc
+                else:
+                    canonical = self._legal_reply(session, value)
+                self._advance(session, action, canonical)
                 before = len(session.transport.outbox)
-                ev = make_web_event(
+                ev = self._make_event(
                     canonical,
-                    user_id=session.user_id,
-                    group_id=session.group_id,
-                    user_name=session.user_name,
-                    is_admin=session.is_admin,
-                    role=session.role,
+                    session,
+                    minigame=bool(session.minigame),
                 )
                 if not ev.raw_text:
                     raise ActionError("回复内容为空。")
@@ -156,7 +198,7 @@ class WebSessionRegistry:
                 return self._snapshot(session, offset=before)
 
             if session.task is not None and not session.task.done():
-                if session.event is not None and broker.has_waiter(session.event.scene_key):
+                if waiting:
                     raise ActionError("当前正在等待你的选择，请先回复或取消。", status_code=409)
                 return self._snapshot(session, error="上一条指令仍在执行，请稍候。")
 
@@ -167,7 +209,12 @@ class WebSessionRegistry:
             command = str(resolved.get("command") or "")
             if not command:
                 raise ActionError("该操作没有可执行的游戏处理器。")
-            result = self._start(session, command, native=True)
+            result = self._start(
+                session,
+                command,
+                native=not bool(resolved.get("minigame")),
+                minigame=resolved.get("game"),
+            )
             session.last_action = {
                 "action": action,
                 "value": resolved.get("value"),
@@ -211,7 +258,14 @@ class WebSessionRegistry:
         session.turn += 1
         session.last_action = {"action": action, "value": value}
 
-    def _start(self, session: _Session, text: str, *, native: bool = False) -> Optional[Dict[str, Any]]:
+    def _start(
+        self,
+        session: _Session,
+        text: str,
+        *,
+        native: bool = False,
+        minigame: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         # 新指令开始前先丢弃上一条指令的出站消息和等待事件，避免把旧连续交互
         # 的输出/状态带到新指令里。
         self._advance(session, "command", text)
@@ -224,7 +278,23 @@ class WebSessionRegistry:
         session.bot = None
         session.error = ""
 
-        ev = self._make_event(text, session)
+        game = canonical_game(minigame) or canonical_game(clean_text(text))
+        reset_only = clean_text(text) == "重置小游戏"
+        if game or reset_only:
+            # Reuse the native reset state cleanup defensively (for example if a
+            # previous handler crashed before its own turn_off).  Web players are
+            # direct events; only the native handlers' shared dictionaries use
+            # this private per-account scope key.
+            if session.minigame_scope:
+                reset_scope(session.minigame_scope)
+            session.minigame = game or ""
+            session.minigame_scope = scope_for(session.user_id)
+        elif session.minigame_scope:
+            reset_scope(session.minigame_scope)
+            session.minigame = ""
+            session.minigame_scope = ""
+
+        ev = self._make_event(text, session, minigame=bool(game or reset_only))
         if not ev.raw_text:
             return self._snapshot(session, error="请输入指令。")
         found = SV.find(ev.raw_text)
@@ -254,12 +324,13 @@ class WebSessionRegistry:
             finally:
                 turn_bot.reset(context)
                 session.bot.release_interactions()
+                reset_scope(session.minigame_scope)
 
         session.task = asyncio.create_task(_run(), name=f"pokemon-web-{session.key}")
         return None
 
-    def _make_event(self, text: str, session: _Session):
-        return make_web_event(
+    def _make_event(self, text: str, session: _Session, *, minigame: bool = False):
+        ev = make_web_event(
             text,
             user_id=session.user_id,
             group_id=session.group_id,
@@ -267,11 +338,30 @@ class WebSessionRegistry:
             is_admin=session.is_admin,
             role=session.role,
         )
+        if minigame:
+            # ``group_id`` is the native handlers' state key.  For QWeb it is a
+            # private value derived from the trusted account, not a group and
+            # not a membership claim.  The event stays a direct web event, so
+            # there is no group delivery.
+            scope = session.minigame_scope or scope_for(session.user_id)
+            session.minigame_scope = scope
+            ev.group_id = scope
+            ev.extra["minigame_scope"] = scope
+        return ev
 
     async def _feed(self, session: _Session, text: str) -> Dict[str, Any]:
-        ev = self._make_event(text, session)
+        ev = self._make_event(
+            text,
+            session,
+            minigame=bool(session.minigame),
+        )
         if not ev.raw_text:
             return self._snapshot(session, error="请输入内容。")
+        if session.minigame:
+            try:
+                ev.raw_text = normalize_guess(ev.raw_text, session.minigame)
+            except ValueError as exc:
+                return self._snapshot(session, error=str(exc))
         before = len(session.transport.outbox)
         broker.feed(ev)
         await self._wait_output(session, before, timeout=3.0)
@@ -317,6 +407,12 @@ class WebSessionRegistry:
         awaiting = bool(session.event is not None and broker.has_waiter(session.event.scene_key))
         done = session.task is None or session.task.done()
         effective_error = error or session.error
+        minigame_view = build_view(
+            session.transport.outbox,
+            game=session.minigame,
+            awaiting=awaiting,
+            done=done,
+        )
         state = build_state(
             session.transport.projection,
             operation=session.operation,
@@ -327,6 +423,8 @@ class WebSessionRegistry:
             battle_view=session.transport.battle_view,
         )
         options = extract_options(session.transport.outbox, awaiting=awaiting)
+        if session.minigame:
+            options = minigame_view["allowed_actions"]
         return {
             "ok": not effective_error,
             "error": effective_error,
@@ -338,6 +436,9 @@ class WebSessionRegistry:
             "options": options,
             "state": state,
             "battle": state.get("battle"),
+            "minigame": minigame_view,
+            "prompt": minigame_view.get("prompt", ""),
+            "allowed_actions": minigame_view.get("allowed_actions", []),
             "legal_actions": list(ALLOWED_ACTIONS),
             "awaiting": awaiting,
             "done": done,
@@ -362,16 +463,29 @@ class WebSessionRegistry:
                 pass
         if session.bot is not None:
             session.bot.release_interactions()
+        reset_scope(session.minigame_scope)
+        session.minigame = ""
+        session.minigame_scope = ""
+        session.event = None
+        session.bot = None
 
     async def cancel(self, session: _Session) -> None:
         async with session.lock:
             await self._cancel_locked(session)
-            session.transport.battle_view = None
-        session.error = "已取消当前连续交互。"
+            session.transport = WebTransport(user_id=session.user_id, user_name=session.user_name, is_admin=session.is_admin)
+            self._advance(session, "cancel", None)
+            session.error = ""
 
     def clear(self) -> None:
-        """测试/停机用：清空所有网页会话。"""
+        """测试/停机用：清空所有网页会话并清理真实小游戏状态。"""
 
+        for session in list(self._sessions.values()):
+            if session.task is not None and not session.task.done():
+                session.task.cancel()
+            if session.bot is not None:
+                session.bot.release_interactions()
+            if session.minigame_scope:
+                reset_scope(session.minigame_scope)
         self._sessions.clear()
 
 
