@@ -1,4 +1,4 @@
-"""LLM 工具定义（MoEllmChats ToolSpec 与网页 Agent 共用）。"""
+"""LLM 工具定义（MoEllmChats ToolSpec 与 QWeb 工具桥共用）。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,26 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ..compat.logger import logger
+from ..identity import effective_role, event_is_admin, event_role, is_admin_role, normalized_role
 
 
 @dataclass
 class ToolContextData:
-    user_id: str = "web-guest"
+    """工具执行上下文。
+
+    ``is_admin`` 只是角色推导结果；调用方不得用客户端字段直接设置管理员。
+    """
+
+    user_id: str = ""
     group_id: Optional[str] = None
-    user_name: str = "网页玩家"
+    user_name: str = ""
     is_admin: bool = False
     platform: str = "web"
     role: str = "member"
+
+    def __post_init__(self) -> None:
+        self.role = effective_role(self.role, is_admin=self.is_admin)
+        self.is_admin = is_admin_role(self.role)
 
 
 @dataclass
@@ -39,36 +49,59 @@ class ToolDef:
 
 
 def resolve_context(raw: Any) -> ToolContextData:
+    """把宿主/聊天工具上下文归一化为可信身份。
+
+    * 普通 dict 只接受 ``user_id`` / ``group_id`` / ``user_name`` / ``role``；
+      显式 ``is_admin`` / ``platform`` 会被丢弃，角色再推导管理员。
+    * 任意对象只读取身份字段和 ``role``，不读取 ``is_admin``。
+    * 聊天事件按发送者角色推导；不再用 ``user_pm`` 直接授予工具管理员。
+    """
+
     if isinstance(raw, ToolContextData):
-        return raw
+        return ToolContextData(
+            user_id=raw.user_id,
+            group_id=raw.group_id,
+            user_name=raw.user_name,
+            is_admin=raw.is_admin,
+            platform=raw.platform,
+            role=raw.role,
+        )
     if isinstance(raw, dict):
-        return ToolContextData(**{k: raw[k] for k in raw if k in ToolContextData.__dataclass_fields__})
+        role = normalized_role(raw.get("role"))
+        return ToolContextData(
+            user_id=str(raw.get("user_id") or ""),
+            group_id=raw.get("group_id"),
+            user_name=str(raw.get("user_name") or ""),
+            is_admin=is_admin_role(role),
+            platform="web",
+            role=role,
+        )
     if raw is None:
         return ToolContextData()
-    user_id = getattr(raw, "user_id", None)
-    if user_id is None and hasattr(raw, "event"):
+    event = getattr(raw, "event", None)
+    if event is not None and (getattr(raw, "user_id", None) is None or hasattr(raw, "bot")):
         try:
             from ..platform.ingress import to_event
 
-            ev = to_event(getattr(raw, "bot", None), getattr(raw, "event"))
+            ev = to_event(getattr(raw, "bot", None), event)
             if ev is not None:
                 return ToolContextData(
                     user_id=ev.user_id,
                     group_id=ev.group_id,
                     user_name=str(ev.sender.get("nickname") or ev.user_id),
-                    is_admin=ev.user_pm <= 1,
+                    is_admin=event_is_admin(ev),
                     platform=ev.platform,
-                    role=str(ev.sender.get("role", "member") or "member"),
+                    role=event_role(ev),
                 )
         except Exception:
             pass
     return ToolContextData(
-        user_id=str(user_id or getattr(raw, "sender_id", "web-guest")),
+        user_id=str(getattr(raw, "user_id", None) or ""),
         group_id=getattr(raw, "group_id", None),
-        user_name=str(getattr(raw, "user_name", "玩家")),
-        is_admin=bool(getattr(raw, "is_admin", False)),
-        platform=str(getattr(raw, "platform", "web")),
-        role=str(getattr(raw, "role", "member") or "member"),
+        user_name=str(getattr(raw, "user_name", None) or ""),
+        is_admin=False,
+        platform=str(getattr(raw, "platform", None) or "web"),
+        role=normalized_role(getattr(raw, "role", None)),
     )
 
 
@@ -82,6 +115,12 @@ def _json_schema(properties: Dict[str, Any], required: Optional[List[str]] = Non
 
 
 # --------------------------------------------------------------------------- handlers
+def _identity_required(_ctx: ToolContextData, action: str) -> Optional[ToolOutcome]:
+    if not _ctx.user_id:
+        return ToolOutcome(text=f"未识别当前用户身份，无法{action}。")
+    return None
+
+
 async def _help_search(*, query: str = "", _ctx: ToolContextData) -> ToolOutcome:
     from ..menu.catalog import search_entries
 
@@ -98,6 +137,8 @@ async def _help_search(*, query: str = "", _ctx: ToolContextData) -> ToolOutcome
 async def _profile(*, _ctx: ToolContextData) -> ToolOutcome:
     from ..game import repository
 
+    if missing := _identity_required(_ctx, "查询档案"):
+        return missing
     data = await repository.profile(_ctx.user_id)
     team_lines = [
         f"{m['name']} Lv.{m['level']} ({'/'.join(m['types'])})" for m in data.get("team", [])
@@ -116,6 +157,8 @@ async def _profile(*, _ctx: ToolContextData) -> ToolOutcome:
 async def _owned(*, page: int = 1, _ctx: ToolContextData) -> ToolOutcome:
     from ..game import repository
 
+    if missing := _identity_required(_ctx, "查询宝可梦"):
+        return missing
     data = await repository.owned(_ctx.user_id, max(0, int(page) - 1))
     if not data["items"]:
         return ToolOutcome(text="你还没有宝可梦，先发送 `领取初始精灵 小火龙` 开局。", structured=data)
@@ -188,6 +231,8 @@ async def _team_analysis(*, _ctx: ToolContextData) -> ToolOutcome:
     from ..game import repository
     from ..game.analytics import recommendations, team_analysis
 
+    if missing := _identity_required(_ctx, "分析队伍"):
+        return missing
     profile = await repository.profile(_ctx.user_id)
     analysis = team_analysis(profile.get("team", []))
     tips = recommendations(analysis)
@@ -234,8 +279,11 @@ async def _chart(*, kind: str = "team_radar", _ctx: ToolContextData) -> ToolOutc
     from ..game import charts, repository
     from ..game.analytics import global_overview, team_analysis
 
-    profile = await repository.profile(_ctx.user_id)
-    if kind in {"team_radar", "team_levels", "team_types"}:
+    team_kinds = {"team_radar", "team_levels", "team_types"}
+    if kind in team_kinds and (missing := _identity_required(_ctx, "生成玩家图表")):
+        return missing
+    profile = await repository.profile(_ctx.user_id) if kind in team_kinds else {}
+    if kind in team_kinds:
         analysis = team_analysis(profile.get("team", []))
         images = charts.team_charts(profile, analysis)
     elif kind in {"popular_species", "level_distribution"}:
@@ -255,6 +303,8 @@ async def _chart(*, kind: str = "team_radar", _ctx: ToolContextData) -> ToolOutc
 async def _command(*, command: str, _ctx: ToolContextData) -> ToolOutcome:
     from ..game.runner import run_command
 
+    if missing := _identity_required(_ctx, "执行游戏指令"):
+        return missing
     result = await run_command(
         command,
         user_id=_ctx.user_id,
@@ -293,6 +343,8 @@ async def _report(*, _ctx: ToolContextData) -> ToolOutcome:
     from ..game import charts, repository
     from ..game.analytics import player_report, recommendations
 
+    if missing := _identity_required(_ctx, "生成训练家报告"):
+        return missing
     report = await player_report(_ctx.user_id)
     profile = report["profile"]
     analysis = report["team_analysis"]
@@ -432,6 +484,7 @@ async def execute_tool(name: str, arguments: Dict[str, Any], ctx: Any) -> ToolOu
     context = resolve_context(ctx)
     payload = dict(arguments or {})
     payload.pop("_tool_context", None)
+    payload.pop("_ctx", None)
     try:
         return await tool.handler(**payload, _ctx=context)
     except TypeError as exc:

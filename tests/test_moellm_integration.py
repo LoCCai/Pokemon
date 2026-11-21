@@ -85,5 +85,8 @@ async def test_mutating_tool_via_moellm(fake_moellm, uid):
     integration.register()
     handler = fake_moellm.specs["pokemon_command"].handler
     context = SimpleNamespace(user_id=uid, group_id=None, user_name="Tester", is_admin=False, platform="web")
+    pending = await handler(command="领取初始精灵 小火龙", _tool_context=context)
+    assert pending.metadata["requires_confirmation"]
+    context.confirmed = True
     result = await handler(command="领取初始精灵 小火龙", _tool_context=context)
     assert "恭喜" in result.text

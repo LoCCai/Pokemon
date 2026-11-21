@@ -26,12 +26,17 @@ OneBot v11/v12/QQ 事件
 网页：
 
 ```text
+宿主 src.qi_web.dependencies
+  -> require_membership / admin_account / csrf_protected
+  -> account.qq + account.role
 POST /api/command
-  -> web.session.WebSessionRegistry   # 每会话串行、可连续交互
+  -> web.session.WebSessionRegistry   # 每个 QQ 串行、可连续交互
   -> 同一个 SV.find / handler
   -> WebTransport 收集出站消息
   -> JSON（文本 + 图片 data URL + 按钮 + awaiting）
 ```
+
+没有宿主依赖时网页不挂载；直接访问默认路由返回 503，不会使用游客身份。
 
 ## 匹配语义
 
@@ -56,7 +61,7 @@ POST /api/command
 | 3 | 群管理员 | 群主/管理员 |
 | 6 | 普通用户 | 所有人 |
 
-网页管理员通过 `X-QWeb-Is-Admin` 或 `SUPERUSERS` 获得 pm<=1 能力。
+网页管理员只由宿主 `account.role` 决定；`SUPERUSERS` 只在聊天侧生效，不参与网页提权。
 
 ## 交互等待
 
@@ -104,8 +109,8 @@ QQ 官方 C2C 不发送 @；图片统一转 JPEG；发送失败只记录日志�
 - 单元测试不依赖真实 QQ/OneBot 连接；
 - OneBot v11 使用真实适配器事件模型验证归一化；
 - v12/QQ 使用 duck-typed 假事件验证字段映射；
-- 网页 API 使用 FastAPI TestClient；
-- LLM Agent 使用 mock completion 验证工具循环，不访问外网；
+- 网页 API 使用 FastAPI TestClient，并用假宿主依赖验证正常授权、缺少 CSRF/身份拒绝；
+- 13 项工具直接调用，不访问模型 API；
 - 图表测试验证 PNG 头，不比较像素。
 
 真实协议联调仍需在测试 Bot 上完成：适配器连接、图片上传、按钮降级、群权限、

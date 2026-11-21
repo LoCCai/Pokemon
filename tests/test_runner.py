@@ -64,3 +64,41 @@ async def test_team_analysis_insights(uid):
     assert analysis["team_size"] == 1
     assert analysis["weaknesses"]
     assert analysis["insights"]
+
+
+async def test_web_admin_only_from_role():
+    from nonebot_plugin_pokemon.game.runner import make_web_event, _is_admin
+
+    # QQ 恰好等于 NoneBot SUPERUSERS，也不能在网页侧获得管理员。
+    ev = make_web_event("刷新每日大量出现", user_id="super-1", role="member")
+    assert _is_admin(ev) is False
+
+    admin = make_web_event("刷新每日大量出现", user_id="super-1", role="admin")
+    assert _is_admin(admin) is True
+
+    denied = await run_command("刷新每日大量出现", user_id="super-1", role="member")
+    assert denied.denied and not denied.ok
+
+
+async def test_session_resets_and_updates_role(uid):
+    from nonebot_plugin_pokemon.web.session import registry
+
+    session = registry.get(uid, role="member")
+    first = await registry.submit(session, "领取初始精灵 小火龙")
+    assert first["ok"], first
+    assert first["text"]
+
+    denied = await registry.submit(session, "刷新每日大量出现")
+    assert not denied["ok"]
+    assert "权限" in denied["error"]
+    # 新指令不应把上一轮的消息/连续交互带出来。
+    assert denied["text"] == ""
+
+    registry.get(uid, role="admin")
+    allowed = await registry.submit(session, "刷新每日大量出现")
+    assert allowed["ok"], allowed
+
+    registry.get(uid, role="member")
+    denied_again = await registry.submit(session, "刷新每日大量出现")
+    assert not denied_again["ok"]
+    assert "权限" in denied_again["error"]

@@ -10,6 +10,7 @@ from ..compat.bot import Bot
 from ..compat.logger import logger
 from ..compat.models import Event
 from ..compat.sv import SV
+from ..identity import effective_role, event_is_admin, event_role, is_admin_role
 from ..platform.ingress import clean_text
 from ..platform.interaction import broker
 from ..platform.message import OutMessage
@@ -87,14 +88,24 @@ def _messages(outbox: List[OutMessage]) -> List[Dict[str, Any]]:
 
 
 def _is_admin(ev: Event) -> bool:
+    """网页/宿主事件只按可信角色判定管理员。
+
+    聊天平台仍允许 NoneBot ``SUPERUSERS`` 兜底；但网页身份由宿主
+    ``account.role`` 决定，不能让一个 QQ 恰好等于 SUPERUSERS 就获得管理权。
+    """
+
+    if ev.platform in {"web", "qweb"}:
+        return event_is_admin(ev)
+    if ev.user_pm <= 1:
+        return True
+    if is_admin_role(event_role(ev)):
+        return True
     try:
         from nonebot import get_driver
 
-        if str(ev.user_id) in {str(x) for x in get_driver().config.superusers}:
-            return True
+        return str(ev.user_id) in {str(x) for x in get_driver().config.superusers}
     except Exception:
-        pass
-    return ev.user_pm <= 1 or str(ev.sender.get("role", "")).lower() in {"owner", "admin", "administrator"}
+        return False
 
 
 def _permission_ok(ev: Event, pm: int) -> bool:
@@ -102,11 +113,11 @@ def _permission_ok(ev: Event, pm: int) -> bool:
         return True
     if pm >= 6:
         return True
-    role = str(ev.sender.get("role", "")).lower()
+    role = event_role(ev)
     if pm == 2:
         return role == "owner"
     if pm == 3:
-        return role in {"owner", "admin", "administrator"}
+        return is_admin_role(role)
     return False
 
 
@@ -121,22 +132,24 @@ def make_web_event(
     platform: str = "web",
     session_suffix: str = "",
 ) -> Event:
-    effective_role = role or ("owner" if is_admin else "member")
-    ev = Event(
+    trusted_role = effective_role(role, is_admin=is_admin)
+    admin = is_admin_role(trusted_role)
+    session_id = f"web:{user_id}{session_suffix}"
+    if group_id:
+        # 只有聊天侧可信上下文才会带群；QWeb 路由固定不传群。
+        session_id = f"web:group:{group_id}:{user_id}{session_suffix}"
+    return Event(
         bot_id="web",
         bot_self_id="web",
         user_type="group" if group_id else "direct",
         group_id=str(group_id) if group_id else None,
         user_id=str(user_id),
-        sender={"nickname": user_name, "role": effective_role},
-        user_pm=1 if is_admin else 6,
+        sender={"nickname": user_name, "role": trusted_role},
+        user_pm=1 if admin else 6,
         raw_text=clean_text(text),
         platform=platform,
-        session_id=f"web:{user_id}{session_suffix}",
+        session_id=session_id,
     )
-    if group_id:
-        ev.session_id = f"web:group:{group_id}"
-    return ev
 
 
 async def run_command(
@@ -150,13 +163,15 @@ async def run_command(
     timeout: float = 20.0,
     interaction_timeout: float = 6.0,
 ) -> RunResult:
+    trusted_role = effective_role(role, is_admin=is_admin)
+    admin = is_admin_role(trusted_role)
     ev = make_web_event(
         text,
         user_id=user_id,
         group_id=group_id,
         user_name=user_name,
-        is_admin=is_admin,
-        role=role,
+        is_admin=admin,
+        role=trusted_role,
     )
     result = RunResult(command=clean_text(text))
     if not ev.raw_text:
@@ -181,7 +196,7 @@ async def run_command(
 
     ev.command = trigger.keyword
     ev.text = arg
-    transport = WebTransport(user_id=str(user_id), user_name=user_name, is_admin=is_admin)
+    transport = WebTransport(user_id=str(user_id), user_name=user_name, is_admin=admin)
     ev.transport = transport
     bot = Bot(ev, transport, default_timeout=interaction_timeout)
 

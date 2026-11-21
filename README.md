@@ -1,11 +1,11 @@
 # 宝可梦 · NoneBot2 分支
 
-> 本仓库分支 `nonebot2` 是 [LoCCai/Pokemon](https://github.com/LoCCai/Pokemon) 的
-> **NoneBot2 移植线路**。上游 `main` 继续服务 gsuid_core；本分支把同一套游戏核心
-> 适配到 NoneBot2 的统一事件模型，并补齐菜单、LLM 工具与 QWeb 网页游玩基底。
+> 本仓库 `qiqi` 分支是 [LoCCai/Pokemon](https://github.com/LoCCai/Pokemon) 的
+> **NoneBot2 / QWeb 集成线路**。上游通用分支保持原样；本分支把游戏核心适配到
+> NoneBot2，并只通过 MoEllmChats 与宿主 QWeb 认证提供 AI/网页能力。
 
 <p align="center">
-  <b>养成 · 探索 · 对战 · 道具 · 小游戏 · 网页 · AI</b><br>
+  <b>养成 · 探索 · 对战 · 道具 · 小游戏 · QWeb</b><br>
   OneBot v11 / OneBot v12 / QQ 官方机器人
 </p>
 
@@ -19,8 +19,8 @@
 | QQ 官方机器人 | ✅ | 群聊 / C2C / 频道；图片走 `file_image` 自动上传；按钮降级 |
 | PicMenu Next | ✅ | `PluginMetadata.extra.menu_data` + 严格 Schema 外部菜单 |
 | MoEllmChats | ✅ 可选 | 13 个强类型 `ToolSpec`；菜单意图发现；变更工具二阶段确认 |
-| QWeb 网页 | ✅ 基底 | `/qweb/pokemon`、`/qweb/admin/pokemon`、独立 `/pokemon` |
-| 网页 AI | ✅ | OpenAI 兼容 Function Calling，复用同一套游戏工具；可复用 MoEllmChats 模型配置 |
+| QWeb 网页 | ✅ 宿主认证 | `/qweb/pokemon`、`/qweb/admin/pokemon`；身份/管理员/CSRF 全部交给 `src.qi_web.dependencies` |
+| AI 工具 | ✅ 可选 | 只通过 MoEllmChats 暴露 13 个工具；模型由宿主 `/qweb/chat` 中用户选择的 New API 模型决定 |
 | 图表 / 分析 | ✅ | 队伍雷达、等级/属性图、全服热门与等级分布、队伍弱点分析 |
 | 素材 | ✅ 懒下载 + 占位 | 缺失图标先用占位图，后台补下载；支持全量下载 |
 
@@ -83,26 +83,16 @@ PicMenu Next 与 MoEllmChats 保持独立安装，未安装时插件仍可正常
 | `POKEMON_RESOURCE_BASE_URL` | `https://silverwing.elysia.beauty/Pokemon` | 图标素材镜像 |
 | `POKEMON_RESOURCE_AUTO_DOWNLOAD` | `true` | 缺图时后台懒下载 |
 | `POKEMON_RESOURCE_DOWNLOAD_CONCURRENCY` | `8` | 素材下载并发 |
-| `POKEMON_WEB_ENABLED` | `true` | 挂载网页路由 |
-| `POKEMON_WEB_PATH` | `/pokemon` | 独立网页入口 |
+| `POKEMON_WEB_ENABLED` | `false` | 挂载 QWeb 路由；必须同时能导入宿主认证依赖 |
+| `POKEMON_QWEB_ENABLED` | `true` | 是否暴露 QWeb 工具/页面入口（仍受上一项与宿主认证约束） |
 | `POKEMON_QWEB_PATH` | `/qweb/pokemon` | QWeb 玩家入口 |
 | `POKEMON_QWEB_ADMIN_PATH` | `/qweb/admin/pokemon` | QWeb 管理入口 |
-| `POKEMON_QWEB_USER_HEADER` | `X-QWeb-User-Id` | 宿主注入的用户身份头 |
-| `POKEMON_QWEB_NAME_HEADER` | `X-QWeb-User-Name` | 宿主注入的昵称头 |
-| `POKEMON_QWEB_ADMIN_HEADER` | `X-QWeb-Is-Admin` | 宿主注入的管理员标记 |
-| `POKEMON_QWEB_SECRET` | 空 | 可选共享密钥；设置后 QWeb 路由要求 `X-QWeb-Secret` |
-| `POKEMON_WEB_ALLOW_GUEST` | `true` | 无身份头时允许游客 |
-| `POKEMON_LLM_ENABLED` | `true` | 网页 AI 开关 |
-| `POKEMON_LLM_PROVIDER` | `auto` | `auto` / `openai` / `moellmchats` / `off` |
-| `POKEMON_LLM_BASE_URL` | 空 | OpenAI 兼容 Base URL（含 `/v1`） |
-| `POKEMON_LLM_API_KEY` | 空 | API Key |
-| `POKEMON_LLM_MODEL` | `gpt-4o-mini` | 模型名 |
-| `POKEMON_LLM_TEMPERATURE` | `0.4` | 采样温度 |
-| `POKEMON_LLM_MAX_STEPS` | `6` | 工具循环上限 |
 | `POKEMON_INTERACTION_TIMEOUT` | `60` | 战斗/小游戏等待回复秒数 |
 
-> 安全提示：`POKEMON_QWEB_SECRET` 只适合反向代理注入；不要把它写进前端代码。
-> 独立 `/pokemon` 默认无登录，公网部署请自行加认证或关闭 `POKEMON_WEB_ENABLED`。
+> 安全提示：插件不再接受 `X-QWeb-User-Id` / `X-QWeb-Is-Admin` / `X-QWeb-Secret`
+> 之类的客户端身份头，也没有游客回退。网页默认关闭；开启时必须由宿主
+> `src.qi_web.dependencies` 提供 `require_membership`、`admin_account`、
+> `csrf_protected`。离线测试可显式注入依赖。
 
 ## 使用
 
@@ -126,11 +116,12 @@ PicMenu Next 与 MoEllmChats 保持独立安装，未安装时插件仍可正常
 
 网页：
 
-- 独立入口：`http://<host>:<port>/pokemon`
 - QWeb 玩家入口：`http://<host>:<port>/qweb/pokemon`
 - QWeb 管理入口：`http://<host>:<port>/qweb/admin/pokemon`
 
-网页包含：训练家面板、功能目录、指令控制台（支持连续交互）、图鉴、数据分析与 AI 助手。
+网页包含：训练家面板、功能目录、指令控制台（支持连续交互）、图鉴与数据分析。
+页面不再生成/保存本地用户 ID，也不再内置直连模型 AI；写请求会先从宿主同源接口
+`/qweb/api/v1/auth/session` 读取 `csrf_token`，再携带 `X-CSRF-Token` 请求头。
 
 ## PicMenu Next 适配
 
@@ -195,24 +186,26 @@ LOCALSTORE_USE_CWD=True
 
 ## QWeb 接入约定
 
-QWeb 宿主（参考 `meme_manager` 的 `qiqi` 分支）通常在反向代理或宿主中间件中完成登录、
-管理员校验与审计，再把身份注入给插件：
+真实宿主是 `src.qi_web.dependencies`，它必须提供 FastAPI 依赖：
 
-```http
-X-QWeb-User-Id: 123456
-X-QWeb-User-Name: 小智
-X-QWeb-Is-Admin: 1
-X-QWeb-Secret: <可选共享密钥>
-```
+| 依赖 | 作用 |
+| --- | --- |
+| `require_membership` | 校验登录成员，返回 `account` |
+| `admin_account` | 校验管理员，返回 `account` |
+| `csrf_protected` | 校验 `X-CSRF-Token` |
+
+插件只读取 `account.qq` 与 `account.role`，不读取请求头、查询参数、Cookie 或请求体
+中的身份/群/管理员声明。前端与宿主一样在请求头携带 `X-CSRF-Token`。
 
 插件侧：
 
-- `/qweb/pokemon/api/*`：玩家 API；
-- `/qweb/admin/pokemon/api/*`：管理 API（需要 `X-QWeb-Is-Admin`）；
+- `/qweb/pokemon/api/*`：玩家 API，依赖 `require_membership`；
+- `/qweb/admin/pokemon/*`：管理入口，整个前缀都依赖 `admin_account`；
+- 所有写请求额外依赖 `csrf_protected`；
 - 两种入口共用同一套会话、数据与工具；
-- `POKEMON_QWEB_SECRET` 非空时校验 `X-QWeb-Secret`；
-- 也可以由宿主直接 `app.include_router(router, prefix="/your/path")`，
-  或调用 `nonebot_plugin_pokemon.web.qweb.mount(app, prefix)`。
+- 无宿主依赖时不挂载网页；直接访问默认路由返回 503，不会以游客身份放行；
+- 也可以由宿主调用 `nonebot_plugin_pokemon.web.qweb.mount(app, prefix)`，
+  但同样必须提供真实认证依赖。
 
 管理 API：
 
@@ -224,19 +217,17 @@ X-QWeb-Secret: <可选共享密钥>
 
 更多示例见 [docs/qweb-integration.md](docs/qweb-integration.md)。
 
-## 网页 AI
+## QWeb AI 工具接线
 
-网页 AI 使用 OpenAI 兼容的 Function Calling，和 MoEllmChats 共用
-`nonebot_plugin_pokemon.llm.tools` 中的工具定义与执行器。
+七七分支移除插件自己的模型/密钥/供应商配置、直连 Agent 与 `/api/ai/chat` 路由。
+AI 只复用：
 
-配置优先级：
+1. MoEllmChats 中的 13 个强类型 `ToolSpec`；
+2. 宿主 `/qweb/chat` 中用户已选择的 New API 模型。
 
-1. `POKEMON_LLM_BASE_URL` / `POKEMON_LLM_API_KEY` / `POKEMON_LLM_MODEL`；
-2. `POKEMON_LLM_PROVIDER=moellmchats`（或 `auto` 且自身未配置）时，读取
-   MoEllmChats 的 `providers.toml` 与 `model_config.json`；
-3. `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` 环境变量。
-
-未配置模型时网页仍可正常游玩，AI 面板会提示配置方法。
+宿主侧的 QWeb AI 工具接线由主控负责，插件不读取 `providers.toml` /
+`model_config.json`，也不发起任何模型 HTTP 请求。`nonebot_plugin_pokemon.qiqi_chat`
+只提供宿主可调用的工具桥，身份参数必须来自宿主 `account.qq` / `account.role`。
 
 ## 素材
 
@@ -264,8 +255,9 @@ nonebot_plugin_pokemon/
 ├── Pokemon/                 # 上游游戏核心（仅改导入与素材兜底）
 ├── game/                    # 只读数据、分析、图表、指令执行器
 ├── menu/                    # 指令目录 -> PicMenu / LLM / 网页
-├── llm/                     # ToolSpec 接入 + 网页 Agent
-├── web/                     # FastAPI 路由、会话、QWeb 适配、静态页
+├── identity.py              # 可信身份/角色归一化
+├── llm/                     # 13 个 ToolSpec 接入（无直连模型 Agent）
+├── web/                     # FastAPI 路由、会话、宿主认证适配、静态页
 └── resources/               # 素材下载器
 ```
 
@@ -279,15 +271,17 @@ pip install pytest pytest-asyncio jsonschema
 python -m pytest -q
 ```
 
-当前包含 82 个测试：匹配语义、权限、OneBot/QQ 事件归一化、插件加载、菜单覆盖、
-PicMenu Schema、网页 API、连续交互会话、LLM 工具与 Agent 工具循环、图表生成、素材索引解析。
+当前包含 100+ 个离线测试：匹配语义、权限、OneBot/QQ 事件归一化、插件加载、菜单覆盖、
+PicMenu Schema、QWeb 宿主授权/缺凭证拒绝、连续交互会话、13 项 LLM 工具、图表生成、
+素材索引解析。测试不访问真实宿主、在线服务或模型 API。
 
 ## 与上游同步
 
 ```bash
-git fetch upstream
-git switch nonebot2
-git merge upstream/main
+# 通用分支 nonebot2 保持原样；只在 qiqi 上合入上游改动
+git fetch origin nonebot2
+git switch qiqi
+git merge origin/nonebot2
 ```
 
 冲突通常集中在 `pokemon_duel/*.py` 的导入行；保持 `nonebot_plugin_pokemon.compat.*`
@@ -299,10 +293,12 @@ git merge upstream/main
   OneBot v11/v12 Bot 生效；
 - OneBot v11 无原生按钮，按钮会降级为文本选项；QQ 官方暂未构造键盘；
 - 网页战斗/小游戏依赖长连接式会话，页面刷新会丢失当前连续交互；
+- 插件不再提供独立网页/游客模式；脱离宿主时网页默认关闭，直接访问返回 503；
 - 后台懒下载受镜像速度影响，首次查看部分宝可梦可能显示占位图；
 - MoEllmChats 的文件/生成工具隔离能力在 Windows 上受限，与本插件无关；
-- 管理指令沿用上游 `pm` 规则：`pm=0` 仅超级管理员，`pm=1` 超级管理员，
-  `pm=2/3` 群主/管理员。
+- 聊天管理指令沿用上游 `pm` 规则：`pm=0` 仅超级管理员，`pm=1` 超级管理员，
+  `pm=2/3` 群主/管理员；网页管理员只由宿主 `account.role` 决定，`SUPERUSERS`
+  不参与网页提权。
 
 ## 许可
 

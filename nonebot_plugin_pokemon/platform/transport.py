@@ -25,8 +25,8 @@ class AdapterTransport:
 class WebTransport:
     """网页会话：不出网，只记录出站消息。"""
 
-    user_id: str = "web-guest"
-    user_name: str = "网页玩家"
+    user_id: str = ""
+    user_name: str = ""
     is_admin: bool = False
     outbox: List[OutMessage] = field(default_factory=list)
     results: List[SendResult] = field(default_factory=list)

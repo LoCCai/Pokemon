@@ -1,7 +1,7 @@
 """MoEllmChats 强类型 ToolSpec 接入（可选依赖）。
 
 * 未安装 ``nonebot_plugin_moellmchats`` 时完全跳过，不影响插件加载；
-* 注册的工具与网页 Agent 共用 :mod:`nonebot_plugin_pokemon.llm.tools`；
+* 注册的工具与 QWeb/宿主工具桥共用 :mod:`nonebot_plugin_pokemon.llm.tools`；
 * 变更型 ``pokemon_command`` 交给 MoEllmChats 的二阶段确认。
 """
 
@@ -19,6 +19,8 @@ def _make_handler(tool: ToolDef):
     async def handler(_tool_context: Any = None, **kwargs: Any) -> Any:
         from nonebot_plugin_moellmchats import ToolResult  # type: ignore
 
+        if tool.effect == "mutating" and getattr(_tool_context, "confirmed", False) is not True:
+            return ToolResult(text="该操作需要宿主确认。", metadata={"requires_confirmation": True})
         outcome = await execute_tool(tool.name, kwargs, _tool_context)
         result_kwargs: dict[str, Any] = {
             "text": outcome.text[: tool.result_limit],

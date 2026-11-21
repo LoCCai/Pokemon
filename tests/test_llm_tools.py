@@ -98,30 +98,42 @@ async def test_admin_tool_denied(uid):
     assert "权限" in out.text or "管理员" in out.text
 
 
-async def test_agent_tool_loop(monkeypatch, uid):
-    from nonebot_plugin_pokemon.llm import agent
+def test_tool_context_ignores_client_admin():
+    from nonebot_plugin_pokemon.llm.tools import resolve_context
 
-    await run_command("领取初始精灵 小火龙", user_id=uid)
-    calls = []
+    ctx = resolve_context(
+        {
+            "user_id": "u1",
+            "user_name": "Tester",
+            "is_admin": True,
+            "platform": "evil",
+            "role": "member",
+        }
+    )
+    assert ctx.user_id == "u1"
+    assert ctx.is_admin is False
+    assert ctx.role == "member"
+    assert ctx.platform == "web"
 
-    async def fake_completion(endpoint, messages, tools):
-        calls.append(messages)
-        if len(calls) == 1:
-            return {
-                "content": "我先查一下你的档案。",
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "pokemon_player_profile", "arguments": "{}"},
-                    }
-                ],
-            }
-        return {"content": "你的档案已经查到了。"}
 
-    monkeypatch.setattr(agent, "resolve_endpoint", lambda: ("http://example.invalid/v1", "k", "test-model"))
-    monkeypatch.setattr(agent, "_chat_completion", fake_completion)
-    reply = await agent.run_agent("看看我的档案", ToolContextData(user_id=uid))
-    assert reply.text == "你的档案已经查到了。"
-    assert reply.tools_used and reply.tools_used[0]["name"] == "pokemon_player_profile"
-    assert len(calls) == 2
+async def test_tool_requires_trusted_identity(uid):
+    from nonebot_plugin_pokemon.llm.tools import resolve_context
+
+    out = await execute_tool("pokemon_player_profile", {}, ToolContextData())
+    assert "身份" in out.text
+
+    out = await execute_tool("pokemon_command", {"command": "刷新每日大量出现"}, ToolContextData())
+    assert "身份" in out.text
+
+    forged = resolve_context({"user_id": uid, "is_admin": True, "role": "member"})
+    out = await execute_tool("pokemon_command", {"command": "刷新每日大量出现"}, forged)
+    assert "权限" in out.text or "管理员" in out.text
+
+
+async def test_tool_admin_from_role(uid):
+    out = await execute_tool(
+        "pokemon_command",
+        {"command": "刷新每日大量出现"},
+        ToolContextData(user_id=uid, role="admin"),
+    )
+    assert "权限" not in out.text and "管理员" not in out.text

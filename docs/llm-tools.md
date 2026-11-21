@@ -1,12 +1,13 @@
 # LLM 工具与 MoEllmChats 接入
 
-插件有两条 AI 接入路径，共用同一份工具实现：
+七七分支只有一条模型接入路径：
 
-1. **聊天侧**：`nonebot-plugin-moellmchats` 的强类型 `ToolSpec`；
-2. **网页侧**：内置 OpenAI 兼容 Function Calling Agent。
+1. `nonebot-plugin-moellmchats` 的强类型 `ToolSpec`；
+2. QWeb 宿主 `/qweb/chat` 中用户选择的 New API 模型，由主控把工具桥接给模型。
 
-两者都调用 `nonebot_plugin_pokemon.llm.tools.execute_tool`，因此权限、数据口径和
-图表生成逻辑完全一致。
+插件不保存模型/密钥/供应商配置，不提供直连 Agent，也没有 `/api/ai/chat`。
+所有工具调用都经过 `nonebot_plugin_pokemon.llm.tools.execute_tool`，因此身份、
+数据口径与图表逻辑一致。
 
 ## 工具清单
 
@@ -66,37 +67,18 @@ NoneBot 启动钩子中，因此 `刷新工具` 能捕获到新 generation。
 - `ToolSpec`：告诉模型“允许用哪些参数调用哪个 handler”；
 - 兼容 Matcher 路线仍可用：模型可生成 `野外探索` 等命令，由统一 Matcher 执行。
 
-## 网页 AI
+## 身份与权限
 
-配置：
+工具上下文的身份只来自可信入口：
 
-```dotenv
-POKEMON_LLM_BASE_URL=https://api.deepseek.com/v1
-POKEMON_LLM_API_KEY=sk-...
-POKEMON_LLM_MODEL=deepseek-chat
-```
+- 聊天侧：事件发送者 `sender.role`（`SUPERUSERS` 仅在聊天侧生效）；
+- QWeb：宿主 `account.qq` + `account.role`；
+- 普通 dict / 对象上下文中的 `is_admin`、`platform` 会被忽略；管理员从 `role`
+  重新推导；没有 `user_id` 的玩家类工具直接返回“未识别当前用户身份”。
 
-或复用 MoEllmChats：
-
-```dotenv
-POKEMON_LLM_PROVIDER=moellmchats
-```
-
-插件会读取 MoEllmChats 数据目录下的 `providers.toml` 与 `model_config.json`，
-选择第一个可用 Provider 和 `selected_model`。
-
-网页 Agent 的循环：
-
-```text
-system prompt（玩家身份 + 功能分类）
-  -> 模型返回 tool_calls
-  -> 执行工具（只读/变更权限检查）
-  -> 工具结果回填
-  -> 最多 POKEMON_LLM_MAX_STEPS 轮
-  -> 返回文本 + 图片 + 工具轨迹
-```
-
-未配置模型时返回明确提示，网页指令面板仍可游玩。
+`pokemon_command` 会把 `user_id` / `role` 传给 `game.runner.run_command`，网页
+平台不再用 `SUPERUSERS` 兜底，因此网页用户即使 QQ 在 `SUPERUSERS` 中，也必须由
+宿主角色授予管理权限。
 
 ## 自定义工具
 
@@ -117,11 +99,12 @@ ToolDef(
 )
 ```
 
-注册、菜单、网页 Agent 会自动读取 `TOOLS`，不需要改第二处。
+注册、菜单与 QWeb 工具桥会自动读取 `TOOLS`，不需要改第二处。
 
 ## 权限
 
 - 工具执行端再次检查用户身份，不只依赖 Schema 隐藏；
 - 管理指令（`pm=0/1`）对普通用户返回“需要管理员权限”；
-- 网页管理员由 `X-QWeb-Is-Admin` 或 NoneBot `SUPERUSERS` 判定；
+- 网页管理员只由宿主 `account.role` 判定，不读取 `X-QWeb-Is-Admin`，也不使用
+  NoneBot `SUPERUSERS` 为网页提权；
 - `pokemon_command` 不会绕过游戏内的每日次数、黑名单、队伍状态等业务检查。

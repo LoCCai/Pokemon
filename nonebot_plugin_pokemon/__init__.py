@@ -2,7 +2,8 @@
 
 * 游戏核心沿用上游实现，通过 :mod:`nonebot_plugin_pokemon.compat` 适配；
 * 单条统一 Matcher 分发约 140 个触发词，覆盖 OneBot v11 / v12 / QQ 官方机器人；
-* 菜单、网页与 LLM 工具共用 :mod:`nonebot_plugin_pokemon.menu.catalog` 的目录。
+* 菜单、QWeb 与 MoEllmChats 工具共用 :mod:`nonebot_plugin_pokemon.menu.catalog` 的目录；
+* 网页只接宿主 ``src.qi_web.dependencies`` 的认证，不再内置直连模型 Agent。
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from nonebot.plugin import PluginMetadata
 
 from .config import Config, plugin_config
 from .menu import VERSION, menu_data
+
+QIQI_CHAT_TOOLS = True
 
 # 导入即注册全部游戏指令（顺序与上游一致）
 from .Pokemon import pokemon_duel as _pokemon_duel  # noqa: F401
@@ -27,7 +30,7 @@ __plugin_meta__ = PluginMetadata(
     ),
     usage=(
         "发送 `宝可梦帮助` 查看主指令；发送 `领取初始精灵 小火龙` 开局。"
-        "网页入口默认 `/pokemon`，QWeb 入口默认 `/qweb/pokemon`。"
+        "QWeb 入口 `/qweb/pokemon` 需宿主认证；网页默认关闭，由宿主显式开启。"
     ),
     type="application",
     config=Config,

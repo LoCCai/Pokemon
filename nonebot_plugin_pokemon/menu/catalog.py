@@ -2,7 +2,7 @@
 
 * 每个已注册的 gsuid 触发器都会映射到一条目录项；
 * 菜单（PicMenu Next 外部菜单与 ``PluginMetadata.extra.menu_data``）由这里生成；
-* MoEllmChats / 网页 AI 读取同一份数据，避免"菜单能点、AI 不知道"的漂移。
+* MoEllmChats 与 QWeb 工具桥读取同一份数据，避免"菜单能点、AI 不知道"的漂移。
 """
 
 from __future__ import annotations
