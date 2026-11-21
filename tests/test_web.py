@@ -87,7 +87,11 @@ def test_index_page(client, headers):
     assert "X-Pokemon-User" not in r.text
     assert "X-QWeb-Is-Admin" not in r.text
     assert "X-CSRF-Token" in r.text
-    assert "/qweb/api/v1/auth/session" in r.text
+    assert '<script src="/qweb/pokemon/static/app.js"></script>' in r.text
+    assert "<script>" not in r.text
+    script = client.get("/qweb/pokemon/static/app.js", headers=headers)
+    assert script.status_code == 200
+    assert "/qweb/api/v1/auth/session" in script.text
     assert "/api/ai/chat" not in r.text
     assert "AI 助手" not in r.text
 

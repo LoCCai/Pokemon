@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Set, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from ..compat.logger import logger
 from ..config import plugin_config
@@ -275,6 +275,10 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
         return {"ok": True, "external_menu": str(path), "tools_registered": registered}
 
     # ----------------------------------------------------------------- 页面
+    @router.get("/static/app.js", include_in_schema=False)
+    async def page_script(_ctx: ToolContextData = Depends(member_context)) -> FileResponse:
+        return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")
+
     @router.get("", response_class=HTMLResponse)
     @router.get("/", response_class=HTMLResponse)
     async def index(
@@ -287,8 +291,16 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
         html = file.read_text(encoding="utf-8")
         base = request.url.path.rstrip("/") or ""
         html = html.replace("__POKEMON_BASE__", base)
-        html = html.replace("__POKEMON_QWEB_BASE__", plugin_config.pokemon_qweb_path.rstrip("/"))
-        return HTMLResponse(html)
+        headers = {
+            "X-Frame-Options": "SAMEORIGIN",
+            "Cache-Control": "private, no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; "
+                "script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+                "frame-ancestors 'self'"
+            ),
+        }
+        return HTMLResponse(html, headers=headers)
 
     return router
 
@@ -341,6 +353,12 @@ def setup_web(app: Any = None, auth: Optional[AuthDependencies] = None, *, force
             mount_plan.append((member_prefix, False))
         if admin_prefix:
             mount_plan.append((admin_prefix, True))
+
+    # 公网由 QWeb 的 API 前缀反代，页面、脚本与业务请求共用身份校验。
+    if member_prefix and member_prefix != admin_prefix:
+        mount_plan.append(("/qweb/api/v1/plugins/pokemon", False))
+    if admin_prefix:
+        mount_plan.append(("/qweb/api/v1/plugins/admin/pokemon", True))
 
     mounted: list[str] = []
     for prefix, admin_only in mount_plan:
