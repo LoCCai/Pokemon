@@ -665,6 +665,7 @@ FodyWeavers.xsd
 result.txt
 upload_file.py
 custom_poke.py
+!/nonebot_plugin_pokemon/Pokemon/pokemon_duel/custom_poke.py
 # Pokemon NoneBot2 runtime
 data/
 triggers.json
