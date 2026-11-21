@@ -332,21 +332,53 @@
     screen.replaceChildren(box('stack',section('出战队伍 · '+party.length+'/6',box('grid',...party.map(m=>card(m,()=>monster(m),'collection')))),
       section('精灵盒 · '+w.owned_total,box('toolbar',filter),cards)));
   }
-  async function bag() {
+  const bagKinds = {items:'道具', eggs:'精灵蛋', technical:'学习机'};
+  let bagKind = 'items', bagPage = 1;
+  function openBag(kind, page=1) {
+    bagKind=kind; bagPage=page;
+    return go('背包');
+  }
+  async function bag(version) {
     const w=store.world;
-    function group(title,items,click){
-      const list=box('list');
-      for(const item of items || [])list.append(button(item.name+'　× '+item.count,()=>click(item)));
-      if(!list.children.length)list.append(h('p','empty','暂无'+title));
-      return section(title,list);
+    const kind=bagKind, page=bagPage;
+    const controls=box('actions');
+    for(const [key,title] of Object.entries(bagKinds)){
+      const tab=button(title,()=>openBag(key));
+      tab.setAttribute('aria-pressed',String(key===kind));
+      controls.append(tab);
     }
+    const content=box('stack',h('p','empty','读取中…'));
+    screen.replaceChildren(section('背包',controls,content));
+    const data=await api('/api/game/inventory/'+kind+'?page='+page);
+    if(version!==store.view)return;
+    const pages=Math.max(1,Math.ceil(data.total/data.page_size));
+    if(page>pages)return openBag(kind,pages);
     async function itemInfo(item){
       const {entry}=await api('/api/item?name='+encodeURIComponent(item.name));
       const equip=['进化石','Z纯晶'].includes(entry.type);
       modal(item.name,box('stack',h('p','',entry.content || entry.description || entry.use || entry.type || ''),chip('持有 '+item.count),
         box('actions',...w.owned.map(m=>equip ? actionButton('给'+m.name+'携带','equip',{item:item.name,pokemon:m.name}) : button('对'+m.name+'使用',()=>legacy('使用道具 '+item.name+' '+m.name+' 1'))))));
     }
-    screen.replaceChildren(box('rail',group('道具',w.items,itemInfo),group('精灵蛋',w.eggs,i=>modal(i.name+'的蛋',box('stack',sprite(i),button('孵化',()=>legacy('宝可梦孵化 '+i.name),'primary'),button('查看图鉴',()=>showDex(i.name))))),group('技能机',w.technical,i=>moveInfo(i.name))));
+    function entryInfo(item){
+      if(kind==='technical')return moveInfo(item.name);
+      if(kind==='items')return itemInfo(item);
+      modal(item.name+'的蛋',box('stack',sprite(item),chip('持有 '+item.count),
+        button('孵化',()=>legacy('宝可梦孵化 '+item.name),'primary'),button('查看图鉴',()=>showDex(item.name))));
+    }
+    const grid=box('bag-grid');
+    for(const item of data.items){
+      const tile=button('',()=>entryInfo(item),'bag-slot');
+      if(kind==='eggs')tile.append(sprite(item));
+      tile.append(h('b','',item.name),h('span','amount','× '+item.count));
+      grid.append(tile);
+    }
+    content.replaceChildren(heading(bagKinds[kind],h('small','',data.total+' 种 · 共 '+data.quantity+' 个')),
+      data.items.length?grid:h('p','empty','暂无'+bagKinds[kind]));
+    if(pages>1){
+      const prev=button('上一页',()=>openBag(kind,page-1)), next=button('下一页',()=>openBag(kind,page+1));
+      prev.disabled=page<=1; next.disabled=page>=pages;
+      content.append(box('actions',prev,h('span','',page+' / '+pages),next));
+    }
   }
   function dex() {
     const search=h('input');search.type='search';search.placeholder='名称或图鉴编号';search.setAttribute('aria-label',search.placeholder);
@@ -450,6 +482,12 @@
     if(focused)$('#quiz-answer')?.focus({preventScroll:true});
   }
   function activity(item) {
+    const bags={'我的精灵蛋':'eggs','我的道具':'items','我的学习机':'technical'};
+    if(bags[item.func])return openBag(bags[item.func]);
+    if(['我的精灵列表','精灵状态'].includes(item.func))return refreshWorld().then(()=>go('队伍'));
+    if(['精灵图鉴','宝可梦技能'].includes(item.func))return go('图鉴');
+    if(item.func==='查看地图')return atlas();
+    if(item.func==='我的金钱')return refreshWorld().then(()=>modal('我的金钱',h('strong','',store.world.profile.score+' 金币')));
     if(quizNames.includes(item.func))return act('minigame_start',item.func);
     const trigger=item.triggers.find(t=>t.type==='fullmatch') || item.triggers[0];
     if(!trigger)return;

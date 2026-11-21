@@ -12,6 +12,8 @@ def test_every_registered_handler_has_menu_entry():
     covered = {entry["handler"] for entry in entries}
     handlers = {f"{t.func.__module__}.{t.func.__name__}" for t in SV.all_triggers()}
     missing = handlers - covered
+    assert not {"wsid", "虚拟id"} & {t.keyword for t in SV.all_triggers()}
+    assert all("早柚" not in t.keyword for t in SV.all_triggers())
     assert not missing, f"菜单缺少处理器: {sorted(missing)}"
 
 

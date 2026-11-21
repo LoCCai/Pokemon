@@ -174,6 +174,19 @@ async def _owned(*, page: int = 1, _ctx: ToolContextData) -> ToolOutcome:
     )
 
 
+async def _inventory(*, kind: str, page: int = 1, _ctx: ToolContextData) -> ToolOutcome:
+    from ..game import repository
+
+    if missing := _identity_required(_ctx, "查看背包"):
+        return missing
+    if kind not in repository.INVENTORY_SOURCES or type(page) is not int or not 1 <= page <= 100000:
+        return ToolOutcome(text="请选择精灵蛋、道具或学习机，并提供有效页码。")
+    data = await repository.inventory_page(_ctx.user_id, kind, page)
+    lines = [f"{item['name']} × {item['count']}" for item in data["items"]]
+    return ToolOutcome(text="\n".join([f"共 {data['total']} 种，合计 {data['quantity']}，第 {page} 页", *lines]),
+                       structured=data)
+
+
 async def _dex(*, name: str, _ctx: ToolContextData) -> ToolOutcome:
     from ..game.data import dex_entry
 
@@ -403,6 +416,14 @@ TOOLS: List[ToolDef] = [
             {"page": {"type": "integer", "minimum": 1, "maximum": 100, "description": "页码，默认 1"}},
         ),
         _owned,
+    ),
+    ToolDef(
+        "pokemon_inventory",
+        "查看本人背包中的精灵蛋、道具或招式学习机，按数量分页。只读。",
+        _json_schema({"kind": {"type": "string", "enum": ["eggs", "items", "technical"],
+                               "description": "精灵蛋 eggs，道具 items，学习机 technical"},
+                      "page": {"type": "integer", "minimum": 1, "maximum": 100000}}, ["kind"]),
+        _inventory,
     ),
     ToolDef(
         "pokemon_dex_lookup",

@@ -18,9 +18,9 @@
 | OneBot v12 | ✅ | 文本 / 图片上传 `upload_file` / mention；按钮降级 |
 | QQ 官方机器人 | ✅ | 群聊 / C2C / 频道；图片走 `file_image` 自动上传；按钮降级 |
 | PicMenu Next | ✅ | `PluginMetadata.extra.menu_data` + 严格 Schema 外部菜单 |
-| MoEllmChats | ✅ 可选 | 13 个强类型 `ToolSpec`；菜单意图发现；变更工具二阶段确认 |
+| MoEllmChats | ✅ 可选 | 14 个强类型 `ToolSpec`；菜单意图发现；变更工具二阶段确认 |
 | QWeb 网页 | ✅ 宿主认证 | `/qweb/pokemon`、`/qweb/admin/pokemon`；身份/管理员/CSRF 全部交给 `src.qi_web.dependencies` |
-| AI 工具 | ✅ 可选 | 只通过 MoEllmChats 暴露 13 个工具；模型由宿主 `/qweb/chat` 中用户选择的 New API 模型决定 |
+| AI 工具 | ✅ 可选 | 只通过 MoEllmChats 暴露 14 个工具；模型由宿主 `/qweb/chat` 中用户选择的 New API 模型决定 |
 | 图表 / 分析 | ✅ | 队伍雷达、等级/属性图、全服热门与等级分布、队伍弱点分析 |
 | 素材 | ✅ 懒下载 + 占位 | 缺失图标先用占位图，后台补下载；支持全量下载 |
 
@@ -159,7 +159,7 @@ SQLite 一一对应；整数列使用 `BIGINT`，`prop_exchange.num` 保留旧�
 
 ## PicMenu Next 适配
 
-插件在 `PluginMetadata.extra["menu_data"]` 中提供 100 条功能目录，每条包含：
+插件在 `PluginMetadata.extra["menu_data"]` 中提供按游戏处理器生成的功能目录，每条包含：
 
 - `func` / `brief_des` / `detail_des`
 - `trigger_method` / `trigger_condition` / `pmn_triggers`
@@ -185,13 +185,14 @@ LOCALSTORE_USE_CWD=True
 
 ## MoEllmChats 适配
 
-插件不硬依赖 MoEllmChats。安装后启动时自动注册 13 个 `ToolSpec`：
+插件不硬依赖 MoEllmChats。安装后启动时自动注册 14 个 `ToolSpec`：
 
 | 工具 | 类型 | 用途 |
 | --- | --- | --- |
 | `pokemon_help_search` | 只读 | 搜索功能/指令目录 |
 | `pokemon_player_profile` | 只读 | 训练家档案、金币、声望、地点、队伍 |
 | `pokemon_owned_list` | 只读 | 分页查询拥有的宝可梦 |
+| `pokemon_inventory` | 只读 | 分页查看本人精灵蛋、道具或学习机及数量 |
 | `pokemon_dex_lookup` | 只读 | 图鉴、种族值、进化链、可学技能 |
 | `pokemon_move_lookup` | 只读 | 技能信息 |
 | `pokemon_item_lookup` | 只读 | 道具信息 |
@@ -256,7 +257,7 @@ LOCALSTORE_USE_CWD=True
 七七分支移除插件自己的模型/密钥/供应商配置、直连 Agent 与 `/api/ai/chat` 路由。
 AI 只复用：
 
-1. MoEllmChats 中的 13 个强类型 `ToolSpec`；
+1. MoEllmChats 中的 14 个强类型 `ToolSpec`；
 2. 宿主 `/qweb/chat` 中用户已选择的 New API 模型。
 
 宿主侧的 QWeb AI 工具接线由主控负责，插件不读取 `providers.toml` /
@@ -290,7 +291,7 @@ nonebot_plugin_pokemon/
 ├── game/                    # 只读数据、分析、图表、指令执行器
 ├── menu/                    # 指令目录 -> PicMenu / LLM / 网页
 ├── identity.py              # 可信身份/角色归一化
-├── llm/                     # 13 个 ToolSpec 接入（无直连模型 Agent）
+├── llm/                     # 14 个 ToolSpec 接入（无直连模型 Agent）
 ├── web/                     # FastAPI 路由、会话、宿主认证适配、静态页
 └── resources/               # 素材下载器
 ```
@@ -306,7 +307,7 @@ python -m pytest -q
 ```
 
 当前包含 100+ 个离线测试：匹配语义、权限、OneBot/QQ 事件归一化、插件加载、菜单覆盖、
-PicMenu Schema、QWeb 宿主授权/缺凭证拒绝、连续交互会话、13 项 LLM 工具、图表生成、
+PicMenu Schema、QWeb 宿主授权/缺凭证拒绝、连续交互会话、14 项 LLM 工具、图表生成、
 素材索引解析。测试不访问真实宿主、在线服务或模型 API。
 
 ## 与上游同步

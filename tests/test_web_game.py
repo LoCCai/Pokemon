@@ -23,6 +23,40 @@ def test_world_requires_membership(client):
     assert client.get("/qweb/pokemon/api/game/world").status_code == 401
 
 
+def test_native_bag_reads_only_the_bound_player_and_paginates(client, headers, uid):
+    from nonebot_plugin_pokemon.Pokemon.utils.dbbase.storage import execute_sync
+    from nonebot_plugin_pokemon import qiqi_chat
+
+    url = "/qweb/pokemon/api/game/inventory/"
+    assert client.get(url + "eggs").status_code == 401
+    assert client.get(url + "eggs?page=0", headers=headers).status_code == 422
+    assert client.get(url + "unknown", headers=headers).status_code == 422
+    other = uid + "-other"
+    for pid in range(1, 35):
+        qty = {16: 188, 19: 176, 34: 0}.get(pid, 1)
+        execute_sync("insert into pokemon_egg(uid,bianhao,num) values(?,?,?)", (uid, pid, qty))
+    execute_sync("insert into pokemon_egg(uid,bianhao,num) values(?,?,?)", (other, 25, 9999))
+    before = client.get("/qweb/pokemon/api/session", headers=headers).json()
+    response = client.get(url + "eggs", params={"uid": other}, headers=headers)
+    assert response.status_code == 200 and "no-store" in response.headers["cache-control"]
+    first = response.json()
+    assert first["total"] == 33 and first["quantity"] == 395 and len(first["items"]) == 30
+    assert first["items"][:2] == [{"id": 16, "name": "波波", "count": 188},
+                                 {"id": 19, "name": "小拉达", "count": 176}]
+    second = client.get(url + "eggs?page=2", headers=headers).json()
+    assert [row["id"] for row in second["items"]] == [31, 32, 33]
+    last = client.get(url + "eggs?page=3", headers=headers).json()
+    assert last["items"] == [] and last["total"] == 33
+    for kind, table, name in [("technical", "prop_technical", "撞击"), ("items", "pokemon_prop", "神奇糖果")]:
+        assert client.get(url + kind, headers=headers).json()["total"] == 0
+        execute_sync(f"insert into {table}(uid,prop,num) values(?,?,?)", (uid, name, 7))
+        assert client.get(url + kind, headers=headers).json()["items"] == [{"name": name, "count": 7}]
+    _, ai, _ = client.portal.call(lambda: qiqi_chat.call("pokemon_inventory", {"kind": "eggs", "page": 2}, qq=uid))
+    assert ai == second
+    after = client.get("/qweb/pokemon/api/session", headers=headers).json()
+    assert (after["operation"], after["offset"]) == (before["operation"], before["offset"])
+
+
 def test_world_contract_from_saved_account(client, headers, uid):
     r = client.get("/qweb/pokemon/api/game/world", headers=headers)
     assert r.status_code == 200

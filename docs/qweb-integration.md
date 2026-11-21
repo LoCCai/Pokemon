@@ -148,7 +148,7 @@ setup_web(app, auth=auth, force=True)
 `GET /api/admin/state` 返回：
 
 - 数据目录、图标/闪光图标数量；
-- 菜单条目数、工具注册状态与 13 项工具数量；
+- 菜单条目数、工具注册状态与 14 项工具数量；
 - 调度任务名；
 - 玩家数、宝可梦记录数；
 - 活跃网页会话数。
@@ -184,3 +184,4 @@ setup_web(app, auth=auth, force=True)
 - 插件不保存/读取 New API 模型选择，插件侧没有模型配置；
 - 真实宿主登录、CSRF 生成规则、审计与限流需在宿主侧联调，离线测试只验证
   FastAPI 依赖契约。
+背包和活动中的库存入口读取 `GET /api/game/inventory/{kind}?page=1`。分类为 `eggs`、`items`、`technical`，每页 30 种。返回当前登录账号的 `items`、种类数 `total` 和总数量 `quantity`。

@@ -64,7 +64,7 @@ async def test_register_tools_with_moellm(fake_moellm, uid):
 
     await run_command("领取初始精灵 小火龙", user_id=uid)
     assert integration.register() is True
-    assert len(fake_moellm.specs) == 13
+    assert len(fake_moellm.specs) == 14
     assert "pokemon_player_profile" in fake_moellm.specs
     spec = fake_moellm.specs["pokemon_command"]
     assert spec.effect == "mutating"
@@ -78,7 +78,7 @@ async def test_register_tools_with_moellm(fake_moellm, uid):
 
     # 幂等：第二次注册直接返回 True，不重复注册
     assert integration.register() is True
-    assert len(fake_moellm.specs) == 13
+    assert len(fake_moellm.specs) == 14
 
 
 async def test_mutating_tool_via_moellm(fake_moellm, uid):

@@ -18,7 +18,7 @@ def test_bootstrap_uses_host_account(client, headers, uid):
     assert data["identity"]["platform"] == "qweb"
     assert data["profile"]["pokemon_count"] == 0
     assert data["menu"]
-    assert data["tools"]["count"] == 13
+    assert data["tools"]["count"] == 14
 
 
 def test_menu(client, headers):
@@ -161,7 +161,7 @@ def test_admin_state_with_admin_account(client, admin_headers):
     data = r.json()
     assert data["ok"]
     assert data["menu_entries"] >= 90
-    assert data["tools_count"] == 13
+    assert data["tools_count"] == 14
     assert "scheduler_jobs" in data
 
 

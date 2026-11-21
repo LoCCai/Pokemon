@@ -77,6 +77,38 @@ async def inventory(uid: str) -> Dict[str, Any]:
     }
 
 
+INVENTORY_SOURCES = {
+    "eggs": ("pokemon_egg", "bianhao"),
+    "items": ("pokemon_prop", "prop"),
+    "technical": ("prop_technical", "prop"),
+}
+
+
+async def inventory_page(uid: str, kind: str, page: int = 1) -> Dict[str, Any]:
+    """Read one player's inventory page and totals from the same DB snapshot."""
+    table, key = INVENTORY_SOURCES[kind]
+    size = 30
+    rows = await fetchall(
+        f"with holdings as (select {key} as item_key, num from {table} where uid=? and num>0), "
+        "batch as (select item_key, num from holdings order by num desc, item_key limit ? offset ?), "
+        "summary as (select count(*) as kinds, coalesce(sum(num),0) as quantity from holdings) "
+        "select summary.kinds, summary.quantity, batch.item_key, batch.num from summary "
+        "left join batch on 1=1 order by batch.num desc, batch.item_key",
+        (uid, size, (page - 1) * size),
+    )
+    items = []
+    for _, _, item_key, count in rows:
+        if item_key is None:
+            continue
+        if kind == "eggs":
+            item = {"id": int(item_key), "name": display_name(int(item_key))}
+        else:
+            item = {"name": str(item_key)}
+        items.append({**item, "count": int(count)})
+    return {"kind": kind, "page": page, "page_size": size, "total": int(rows[0][0]),
+            "quantity": int(rows[0][1]), "items": items}
+
+
 async def profile(uid: str) -> Dict[str, Any]:
     map_row = await _map_row(uid)
     score = await pc.SCORE.get_score(uid)

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Literal, Optional, Set, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -322,6 +322,16 @@ def create_router(auth: AuthDependencies, *, admin_only: bool = False) -> APIRou
         data["identity"] = {"is_admin": ctx.is_admin}
         data["session"] = registry.status(session, "", len(session.transport.outbox))
         return data
+
+    @router.get("/api/game/inventory/{kind}")
+    async def game_inventory(
+        kind: Literal["eggs", "items", "technical"],
+        response: Response,
+        page: int = Query(1, ge=1, le=100000),
+        ctx: ToolContextData = Depends(member_context),
+    ) -> Dict[str, Any]:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await repository.inventory_page(ctx.user_id, kind, page)
 
     @router.get("/api/game/sprite/{pokemon_id}")
     async def game_sprite(

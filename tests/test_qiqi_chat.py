@@ -5,9 +5,10 @@ import pytest
 from nonebot_plugin_pokemon import qiqi_chat
 
 
-def test_definitions_keep_13_tools():
+def test_host_inventory_tool_is_read_only():
     definitions = qiqi_chat.definitions()
-    assert len(definitions) == 13
+    assert len(definitions) == 14
+    assert definitions["pokemon_inventory"].effect == "read_only"
     assert "pokemon_command" in definitions
 
 
